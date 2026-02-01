@@ -1,0 +1,5 @@
+{
+  "name": " Sensex HFT Scalper",
+  "description": "A high-frequency trading dashboard interface for Flattrade V2, featuring dynamic scaling controls, strike selection, and real-time execution monitoring.",
+  "requestFramePermissions": []
+}
