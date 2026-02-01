@@ -58,4 +58,10 @@ function startWebSocket(token) {
         console.log('VPS connected to Flattrade Market Data');
         const connectReq = { t: "c", uid: FLATTRADE_CONFIG.user_id, actid: FLATTRADE_CONFIG.user_id, source: "API" };
         marketSocket.send(JSON.stringify(connectReq));
-        setTimeout(() => { const subscribeReq = { t: "t", k: "NFO|56000
+        setTimeout(() => { const subscribeReq = { t: "t", k: "NFO|56000,NFO|56001" }; marketSocket.send(JSON.stringify(subscribeReq)); }, 1000);
+    });
+    marketSocket.on('message', (data) => { wss.clients.forEach(client => { if (client.readyState === WebSocket.OPEN) { client.send(data.toString()); } }); });
+    marketSocket.on('error', (err) => console.error("Flattrade WS Error:", err));
+}
+process.on('uncaughtException', (err) => { console.error('CRITICAL ERROR:', err); });
+app.listen(PORT, '0.0.0.0', () => console.log(`VPS Server running on http://0.0.0.0:${PORT}`));
