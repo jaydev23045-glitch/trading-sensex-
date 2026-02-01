@@ -1,8 +1,9 @@
-const express = require('express');
-const cors = require('cors');
-const WebSocket = require('ws');
-const axios = require('axios');
-const crypto = require('crypto');
+import express from 'express';
+import cors from 'cors';
+import WebSocket, { WebSocketServer } from 'ws';
+import axios from 'axios';
+import crypto from 'crypto';
+
 const app = express();
 const PORT = 5000;
 const WS_PORT = 8080;
@@ -49,7 +50,7 @@ app.post('/place-order', async (req, res) => {
     } catch (e) { console.error("Order Error:", e.message); res.status(500).json({ error: e.message }); }
 });
 
-const wss = new WebSocket.Server({ port: WS_PORT, host: '0.0.0.0' });
+const wss = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' });
 
 function startWebSocket(token) {
     if (marketSocket) { try { marketSocket.close(); } catch(e) {} }

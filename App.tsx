@@ -9,8 +9,10 @@ import { DashboardConfig, Position, SessionStats, Order, Trade, FundLimits, Watc
 import { DEFAULT_DASHBOARD_CONFIG } from './constants';
 
 // AUTOMATICALLY DETECT IP (Works on VPS and Localhost)
-const API_BASE = `http://${window.location.hostname}:5000`;
-const WS_URL = `ws://${window.location.hostname}:8080`;
+// Fix: Handle empty hostname by defaulting to localhost
+const getHostname = () => window.location.hostname || 'localhost';
+const API_BASE = `http://${getHostname()}:5000`;
+const WS_URL = `ws://${getHostname()}:8080`;
 
 const formatCurrency = (val: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(val);
 const formatTime = () => new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -80,6 +82,7 @@ const App: React.FC = () => {
 
     const connect = () => {
         try {
+            console.log("Connecting to WebSocket:", WS_URL);
             ws = new WebSocket(WS_URL);
             ws.onopen = () => { setIsConnected(true); console.log("Connected to Backend Socket"); };
             ws.onmessage = (event) => {
@@ -94,7 +97,7 @@ const App: React.FC = () => {
               } catch (e) {}
             };
             ws.onclose = () => { setIsConnected(false); };
-            ws.onerror = () => { setIsConnected(false); };
+            ws.onerror = (err) => { console.error("WebSocket Error:", err); setIsConnected(false); };
         } catch (e) { console.error("WebSocket setup failed:", e); setIsConnected(false); }
     };
 
