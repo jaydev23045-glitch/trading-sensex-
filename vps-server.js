@@ -12,7 +12,7 @@ const FLATTRADE_CONFIG = {
     api_key: "ENTER_YOUR_API_KEY_HERE",
     api_secret: "ENTER_YOUR_API_SECRET_HERE",
     user_id: "ENTER_YOUR_USER_ID_HERE", 
-    redirect_url: "http://localhost:5173" 
+    redirect_url: "ENTER_YOUR_REDIRECT_URL_HERE" 
 };
 
 app.use(cors());
