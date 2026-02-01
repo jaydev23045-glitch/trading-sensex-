@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Settings, Zap, TrendingUp, TrendingDown, Wallet, Layers, ArrowUpRight,
-  Shield, Play, Target, ChevronDown, ChevronUp, Hourglass
+  Shield, Play, Target, ChevronDown, ChevronUp, Hourglass, AlertTriangle
 } from 'lucide-react';
 import { NumberInput } from './components/ui/Input';
 import { StatusBadge } from './components/ui/StatusBadge';
 import { DashboardConfig, Position, SessionStats, Order, Trade, FundLimits, Watcher } from './types';
 import { DEFAULT_DASHBOARD_CONFIG } from './constants';
 
-const API_BASE = 'http://127.0.0.1:5000';
-const WS_URL = 'ws://127.0.0.1:8080';
+// AUTOMATICALLY DETECT IP (Works on VPS and Localhost)
+const API_BASE = `http://${window.location.hostname}:5000`;
+const WS_URL = `ws://${window.location.hostname}:8080`;
 
 const formatCurrency = (val: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(val);
 const formatTime = () => new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -64,7 +65,7 @@ const App: React.FC = () => {
                 }
             } catch (e) {
                 console.error(e);
-                alert("Login Error: Could not reach VPS Server.\n\nMake sure the SSH Tunnel is active on Port 5000.");
+                alert("Login Error: Could not reach VPS Server.\n\nMake sure the Backend is running on Port 5000.");
             } finally {
                 setIsLoggingIn(false);
             }
@@ -75,24 +76,36 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let ws: WebSocket | null = null;
-    try {
-        ws = new WebSocket(WS_URL);
-        ws.onopen = () => { setIsConnected(true); console.log("Connected to Backend Socket"); };
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            const now = Date.now();
-            if (data.symbol === selectedIndex) setSpotPrice(data.lp); 
-            if (data.symbol.includes('CE')) stateRef.current.ceLtp = data.lp;
-            if (data.symbol.includes('PE')) stateRef.current.peLtp = data.lp;
-            if (data.timestamp) setLatency(now - data.timestamp);
-            setRenderTrigger(prev => prev + 1);
-          } catch (e) {}
-        };
-        ws.onclose = () => setIsConnected(false);
-        ws.onerror = () => setIsConnected(false);
-    } catch (e) { console.error("WebSocket setup failed:", e); setIsConnected(false); }
-    return () => { if (ws) ws.close(); };
+    let reconnectInterval: any = null;
+
+    const connect = () => {
+        try {
+            ws = new WebSocket(WS_URL);
+            ws.onopen = () => { setIsConnected(true); console.log("Connected to Backend Socket"); };
+            ws.onmessage = (event) => {
+              try {
+                const data = JSON.parse(event.data);
+                const now = Date.now();
+                if (data.symbol === selectedIndex) setSpotPrice(data.lp); 
+                if (data.symbol.includes('CE')) stateRef.current.ceLtp = data.lp;
+                if (data.symbol.includes('PE')) stateRef.current.peLtp = data.lp;
+                if (data.timestamp) setLatency(now - data.timestamp);
+                setRenderTrigger(prev => prev + 1);
+              } catch (e) {}
+            };
+            ws.onclose = () => { setIsConnected(false); };
+            ws.onerror = () => { setIsConnected(false); };
+        } catch (e) { console.error("WebSocket setup failed:", e); setIsConnected(false); }
+    };
+
+    connect();
+    reconnectInterval = setInterval(() => {
+        if (!ws || ws.readyState === WebSocket.CLOSED) {
+            connect();
+        }
+    }, 5000);
+
+    return () => { if (ws) ws.close(); clearInterval(reconnectInterval); };
   }, [selectedIndex]);
 
   const addOrder = (order: Order) => { stateRef.current.orders.unshift(order); };
@@ -115,7 +128,7 @@ const App: React.FC = () => {
           console.error("Order Failed", e);
           const isNetworkError = e.message.includes('Failed to fetch') || e.message.includes('NetworkError');
           if (isNetworkError) {
-             alert("CRITICAL ERROR: Failed to connect to VPS!\n\n1. Check if SSH Tunnel is active.\n2. Check if vps-server.js is running.");
+             alert("CRITICAL ERROR: Failed to connect to VPS!\n\n1. Check if backend is running on Port 5000.");
           }
           return { status: "FAILED", message: isNetworkError ? "Connection Error" : e.message };
       }
@@ -129,7 +142,7 @@ const App: React.FC = () => {
         if (data.url) window.location.href = data.url;
         else alert('Login URL not found');
     } catch (e) {
-        alert("Connection Failed: Cannot reach VPS Server at http://127.0.0.1:5000.");
+        alert("Connection Failed: Cannot reach VPS Server at Port 5000.");
     }
   };
 
@@ -227,6 +240,16 @@ const App: React.FC = () => {
           <StatusBadge latency={latency} isConnected={isConnected} />
         </div>
       </header>
+
+      {!isConnected && (
+        <div className="bg-red-500/10 border-b border-red-500/20 py-2 text-center">
+            <div className="flex items-center justify-center gap-2 text-red-400 text-xs font-bold">
+                <AlertTriangle className="w-4 h-4" />
+                <span>CONNECTION LOST. 1. Is 'node vps-server.js' running? 2. Is your SSH Tunnel active?</span>
+            </div>
+        </div>
+      )}
+
       <main className="max-w-[1600px] mx-auto p-6 space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
           <div className="bg-[#0f172a] rounded-xl border border-slate-800 p-6 relative overflow-hidden group h-full">

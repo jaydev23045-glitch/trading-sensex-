@@ -64,4 +64,9 @@ function startWebSocket(token) {
     marketSocket.on('error', (err) => console.error("Flattrade WS Error:", err));
 }
 process.on('uncaughtException', (err) => { console.error('CRITICAL ERROR:', err); });
-app.listen(PORT, '0.0.0.0', () => console.log(`VPS Server running on http://0.0.0.0:${PORT}`));
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ VPS Server running on Port ${PORT}`);
+    console.log(`✅ WebSocket running on Port ${WS_PORT}`);
+    console.log(`👉 If using from Mac: Ensure SSH Tunnel is active.`);
+});
