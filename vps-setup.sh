@@ -3,15 +3,22 @@ echo "==========================================="
 echo "   SENSEX HFT BOT - ONE CLICK SETUP"
 echo "==========================================="
 
-echo "1. Updating Linux System..."
-sudo apt update -y
+echo "1. Cleaning old versions..."
+# Remove old or broken node installations to prevent conflicts
+sudo apt remove -y nodejs npm || true
+sudo apt autoremove -y || true
 
-echo "2. Installing Node.js..."
-sudo apt install -y nodejs npm git
+echo "2. Installing Node.js 20 (Latest)..."
+# This downloads the official NodeSource setup script for Node 20
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+
+# Install Node.js and Git
+sudo apt install -y nodejs git
 
 echo "3. Installing Project Libraries..."
+# Remove old modules to ensure a fresh start
+rm -rf node_modules
 npm install
-# Ensure specific packages are present
 npm install express cors ws axios
 
 echo "4. Running Configuration Wizard..."

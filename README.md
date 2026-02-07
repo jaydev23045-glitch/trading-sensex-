@@ -12,7 +12,10 @@
    ```bash
    bash vps-setup.sh
    ```
-   *Follow the prompts to enter your API Key and User ID.*
+   *   **Step 1:** It will ask for your VPS IP first.
+   *   **Step 2:** It will give you the **Redirect URL**.
+   *   **Step 3:** Go to Flattrade, create the app with that URL.
+   *   **Step 4:** Come back to the terminal and paste your User ID, API Key, and Secret.
 
 4. **Start the App**:
    ```bash

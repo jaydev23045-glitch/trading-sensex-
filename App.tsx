@@ -67,13 +67,19 @@ const App: React.FC = () => {
                 }
             } catch (e) {
                 console.error(e);
-                alert("Login Error: Could not reach VPS Server.\n\nMake sure the Backend is running on Port 5000.");
+                alert(`Login Error: Could not reach VPS Server at ${API_BASE}.\n\n1. Ensure 'node vps-server.js' is running.\n2. Ensure Port 5000 is allowed in AWS Firewall.`);
             } finally {
                 setIsLoggingIn(false);
             }
         }
     };
     handleAuthCallback();
+
+    // Health check
+    fetch(`${API_BASE}/ping`)
+        .then(() => console.log("Backend Connection OK"))
+        .catch(e => console.error("Backend Connection Check Failed:", e));
+
   }, []);
 
   useEffect(() => {
@@ -131,7 +137,7 @@ const App: React.FC = () => {
           console.error("Order Failed", e);
           const isNetworkError = e.message.includes('Failed to fetch') || e.message.includes('NetworkError');
           if (isNetworkError) {
-             alert("CRITICAL ERROR: Failed to connect to VPS!\n\n1. Check if backend is running on Port 5000.");
+             alert(`CRITICAL ERROR: Could not reach VPS Backend!\n\nTarget: ${API_BASE}/place-order\n\n1. Check if 'node vps-server.js' is running without errors.\n2. Ensure Port 5000 is open in AWS Firewall.`);
           }
           return { status: "FAILED", message: isNetworkError ? "Connection Error" : e.message };
       }
@@ -145,7 +151,7 @@ const App: React.FC = () => {
         if (data.url) window.location.href = data.url;
         else alert('Login URL not found');
     } catch (e) {
-        alert("Connection Failed: Cannot reach VPS Server at Port 5000.");
+        alert(`Connection Failed: Cannot reach VPS Server at ${API_BASE}\n\nCheck Port 5000.`);
     }
   };
 
@@ -248,7 +254,7 @@ const App: React.FC = () => {
         <div className="bg-red-500/10 border-b border-red-500/20 py-2 text-center">
             <div className="flex items-center justify-center gap-2 text-red-400 text-xs font-bold">
                 <AlertTriangle className="w-4 h-4" />
-                <span>CONNECTION LOST. 1. Is 'node vps-server.js' running? 2. Is your SSH Tunnel active?</span>
+                <span>CONNECTION LOST. 1. Is 'node vps-server.js' running? 2. Is Port 5000 open in AWS?</span>
             </div>
         </div>
       )}

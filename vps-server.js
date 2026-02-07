@@ -4,6 +4,14 @@ import WebSocket, { WebSocketServer } from 'ws';
 import axios from 'axios';
 import crypto from 'crypto';
 
+// 1. GLOBAL ERROR HANDLERS TO PREVENT CRASHES
+process.on('uncaughtException', (err) => { 
+    console.error('CRITICAL ERROR (Uncaught):', err); 
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 const app = express();
 const PORT = 5000;
 const WS_PORT = 8080;
@@ -15,39 +23,65 @@ const FLATTRADE_CONFIG = {
     redirect_url: "ENTER_YOUR_REDIRECT_URL_HERE" 
 };
 
-app.use(cors());
+// 2. ENABLE CORS FOR ALL ORIGINS
+app.use(cors({ origin: '*' }));
 app.use(express.json());
+
+// 3. REQUEST LOGGER (Helps verify if requests are reaching the server)
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
 
 let flattradeToken = null;
 let marketSocket = null;
 
 app.get('/', (req, res) => { res.send("VPS Server is Running! Status: " + (flattradeToken ? "Logged In" : "Waiting for Login")); });
-app.get('/login', (req, res) => { const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`; res.json({ url: loginUrl }); });
+
+// Ping endpoint for health checks
+app.get('/ping', (req, res) => res.send('pong'));
+
+app.get('/login', (req, res) => { 
+    const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`; 
+    res.json({ url: loginUrl }); 
+});
 
 app.post('/authenticate', async (req, res) => {
     const { code } = req.body;
     try {
         const rawString = FLATTRADE_CONFIG.api_key + code + FLATTRADE_CONFIG.api_secret;
         const apiSecretHash = crypto.createHash('sha256').update(rawString).digest('hex');
-        const response = await axios.post('https://authapi.flattrade.in/auth/session', { api_key: FLATTRADE_CONFIG.api_key, request_code: code, api_secret: apiSecretHash });
+        const response = await axios.post('https://authapi.flattrade.in/auth/session', { 
+            api_key: FLATTRADE_CONFIG.api_key, 
+            request_code: code, 
+            api_secret: apiSecretHash 
+        });
         if (response.data.token) {
             flattradeToken = response.data.token;
-            console.log("Login Successful. Token:", flattradeToken);
+            console.log("✅ Login Successful. Token obtained.");
             startWebSocket(flattradeToken);
             res.json({ success: true, token: flattradeToken });
-        } else { throw new Error("No token in response"); }
-    } catch (error) { res.status(500).json({ error: 'Auth failed', details: error.response?.data }); }
+        } else { 
+            throw new Error("No token in response"); 
+        }
+    } catch (error) { 
+        console.error("Auth Error:", error.response?.data || error.message);
+        res.status(500).json({ error: 'Auth failed', details: error.response?.data || error.message }); 
+    }
 });
 
 app.post('/place-order', async (req, res) => {
     if (!flattradeToken) return res.status(401).json({ error: 'VPS: Not logged in to Flattrade' });
     try {
         const orderData = req.body;
-        console.log("VPS Placing Order:", orderData.symbol);
+        console.log("VPS Placing Order:", orderData.symbol, orderData.type, orderData.side);
         const payload = { ...orderData, uid: FLATTRADE_CONFIG.user_id, actid: FLATTRADE_CONFIG.user_id };
         const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/PlaceOrder', payload, { headers: { Authorization: `Bearer ${flattradeToken}` } });
         res.json(response.data);
-    } catch (e) { console.error("Order Error:", e.message); res.status(500).json({ error: e.message }); }
+    } catch (e) { 
+        console.error("Order Error:", e.message); 
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
 const wss = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' });
@@ -56,18 +90,36 @@ function startWebSocket(token) {
     if (marketSocket) { try { marketSocket.close(); } catch(e) {} }
     marketSocket = new WebSocket('wss://piconnect.flattrade.in/PiConnectTP/websocket');
     marketSocket.on('open', () => {
-        console.log('VPS connected to Flattrade Market Data');
+        console.log('✅ VPS connected to Flattrade Market Data');
         const connectReq = { t: "c", uid: FLATTRADE_CONFIG.user_id, actid: FLATTRADE_CONFIG.user_id, source: "API" };
         marketSocket.send(JSON.stringify(connectReq));
         setTimeout(() => { const subscribeReq = { t: "t", k: "NFO|56000,NFO|56001" }; marketSocket.send(JSON.stringify(subscribeReq)); }, 1000);
     });
-    marketSocket.on('message', (data) => { wss.clients.forEach(client => { if (client.readyState === WebSocket.OPEN) { client.send(data.toString()); } }); });
+    marketSocket.on('message', (data) => { 
+        wss.clients.forEach(client => { 
+            if (client.readyState === WebSocket.OPEN) { 
+                client.send(data.toString()); 
+            } 
+        }); 
+    });
     marketSocket.on('error', (err) => console.error("Flattrade WS Error:", err));
+    marketSocket.on('close', () => console.log("Flattrade WS Closed"));
 }
-process.on('uncaughtException', (err) => { console.error('CRITICAL ERROR:', err); });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ VPS Server running on Port ${PORT}`);
     console.log(`✅ WebSocket running on Port ${WS_PORT}`);
-    console.log(`👉 If using from Mac: Ensure SSH Tunnel is active.`);
+    console.log(`👉 Ensure AWS Firewall allows Ports ${PORT} and ${WS_PORT}.`);
+});
+
+// 4. CHECK FOR PORT CONFLICTS
+server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+        console.error(`\n❌ CRITICAL ERROR: Port ${PORT} is already in use!`);
+        console.error(`   This usually means an old version of the server is still running.`);
+        console.error(`   Solution: Run 'pkill node' to stop all servers, then start again.\n`);
+        process.exit(1);
+    } else {
+        console.error("Server Error:", e);
+    }
 });
