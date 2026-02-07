@@ -1,21 +1,24 @@
 # Sensex HFT Scalper - VPS Setup Guide
 
-## How to Install (Fresh Start)
+## Phase 1: GitHub Setup (Local PC)
+1. Create a repository on GitHub named `trading-sensex`.
+2. Upload all project files to this repository.
 
+## Phase 2: VPS Installation
 1. **Connect to your VPS**.
-2. **Clone the code** (or ensure files are present).
+2. **Clone the code**:
    ```bash
-   git clone <YOUR_GITHUB_REPO_URL>
-   cd <YOUR_REPO_NAME>
+   git clone https://github.com/YOUR_USERNAME/trading-sensex.git
+   cd trading-sensex
    ```
 3. **Run the Setup Script**:
    ```bash
    bash vps-setup.sh
    ```
-   *   **Step 1:** It will ask for your VPS IP first.
-   *   **Step 2:** It will give you the **Redirect URL**.
-   *   **Step 3:** Go to Flattrade, create the app with that URL.
-   *   **Step 4:** Come back to the terminal and paste your User ID, API Key, and Secret.
+   *   **Step 1:** Enter your VPS IP Address when asked.
+   *   **Step 2:** Copy the **Redirect URL** provided.
+   *   **Step 3:** Go to Flattrade Dashboard -> Create App -> Paste the URL.
+   *   **Step 4:** Copy your User ID, API Key, and Secret back into the terminal.
 
 4. **Start the App**:
    ```bash

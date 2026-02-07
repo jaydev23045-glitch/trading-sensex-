@@ -15,6 +15,9 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 # Install Node.js and Git
 sudo apt install -y nodejs git
 
+# REFRESH SHELL PATH (Fixes 'node not found' error immediately after install)
+hash -r
+
 echo "3. Installing Project Libraries..."
 # Remove old modules to ensure a fresh start
 rm -rf node_modules
