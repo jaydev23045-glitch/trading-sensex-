@@ -3,7 +3,7 @@ import {
   Settings, Zap, TrendingUp, TrendingDown, Layers, ArrowUpRight,
   Shield, Play, Target, ChevronDown, ChevronUp, AlertTriangle, RefreshCw,
   Clock, FileText, CheckCircle2, XCircle, AlertCircle, History, Wallet, PieChart, ArrowRightCircle, WifiOff,
-  Calculator, Receipt, Filter, Copy
+  Calculator, Receipt, Filter, Copy, Wifi
 } from 'lucide-react';
 import { NumberInput } from './components/ui/Input';
 import { StatusBadge } from './components/ui/StatusBadge';
@@ -84,7 +84,10 @@ const App: React.FC = () => {
         clearTimeout(timeoutId);
         
         setBackendError(null);
-        setIsConnected(authData.isLoggedIn === true);
+        // Only update if not currently processing a login to avoid UI flickering
+        if (!isLoggingIn) {
+            setIsConnected(authData.isLoggedIn === true);
+        }
       } catch (e) {
         setBackendError("VPS SERVER OFFLINE");
         setIsConnected(false);
@@ -94,35 +97,44 @@ const App: React.FC = () => {
     checkConnection(); // Initial check
     const interval = setInterval(checkConnection, 2000); // Check often to sync UI state
     return () => clearInterval(interval);
-  }, []);
+  }, [isLoggingIn]);
 
   // 2. AUTHENTICATION HANDLER
+  const authAttempted = useRef(false); // Ref to prevent double-execution in StrictMode
+
   useEffect(() => {
     const handleAuthCallback = async () => {
         const params = new URLSearchParams(window.location.search);
         const code = params.get('code'); 
-        if (code) {
+        
+        // Only proceed if code exists AND we haven't tried yet
+        if (code && !authAttempted.current) {
+            authAttempted.current = true;
             setIsLoggingIn(true);
-            window.history.replaceState({}, document.title, window.location.pathname); // Clean URL
+            
             try {
+                console.log("Sending Auth Code to VPS...");
                 const response = await fetch(`${API_BASE}/authenticate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ code })
                 });
                 const data = await response.json();
+                
+                // Clean URL only after we get a response
+                window.history.replaceState({}, document.title, window.location.pathname);
+
                 if (data.success) {
                     setIsConnected(true);
                     setBackendError(null);
-                    alert("✅ Login Successful! Connected to Flattrade.");
+                    alert("✅ SYSTEM ONLINE\n\nBroker connected successfully. Trading is now active.");
                 } else {
-                    // Show detailed error from Broker
                     const errorMsg = data.details?.emsg || data.details?.message || JSON.stringify(data.details) || data.error;
-                    alert("❌ Login Failed: " + errorMsg);
+                    alert("❌ LOGIN FAILED\n\nBroker Response: " + errorMsg);
                 }
             } catch (e) {
                 console.error(e);
-                alert(`Login Error: Could not reach VPS Server.\n\nEnsure you have run 'npm run start-all' in your terminal.`);
+                alert(`❌ CONNECTION ERROR\n\nCould not reach VPS Server at ${API_BASE}. Check if server is running.`);
             } finally {
                 setIsLoggingIn(false);
             }
@@ -485,11 +497,34 @@ const App: React.FC = () => {
           <h1 className="text-xl font-bold text-white tracking-tight">{selectedIndex} <span className="text-blue-500">HFT</span> Scalper</h1>
         </div>
         <div className="flex items-center gap-4">
-           {!isConnected && (
-             <button onClick={handleLogin} className={`px-3 py-1.5 text-xs font-bold rounded transition-colors ${backendError ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-500'}`} disabled={isLoggingIn || !!backendError}>
-                {isLoggingIn ? "OPENING..." : "LOGIN BROKER"}
-             </button>
-           )}
+           <button 
+                onClick={isConnected ? undefined : handleLogin} 
+                disabled={isLoggingIn || isConnected || !!backendError}
+                className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded shadow-lg transition-all ${
+                    isConnected 
+                        ? 'bg-emerald-500 text-white cursor-default shadow-emerald-500/20' 
+                        : backendError 
+                            ? 'bg-slate-700 text-slate-400 cursor-not-allowed' 
+                            : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20'
+                }`}
+            >
+                {isLoggingIn ? (
+                    <>
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                        <span>CONNECTING...</span>
+                    </>
+                ) : isConnected ? (
+                    <>
+                        <Wifi className="w-3 h-3" />
+                        <span>SYSTEM ONLINE</span>
+                    </>
+                ) : (
+                    <>
+                        <Zap className="w-3 h-3 fill-current" />
+                        <span>LOGIN BROKER</span>
+                    </>
+                )}
+            </button>
           <StatusBadge latency={latency} isConnected={isConnected} />
         </div>
       </header>
