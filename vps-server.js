@@ -27,7 +27,7 @@ const FLATTRADE_CONFIG = {
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// 3. REQUEST LOGGER (Helps verify if requests are reaching the server)
+// 3. REQUEST LOGGER
 app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
     next();
@@ -43,6 +43,7 @@ app.get('/ping', (req, res) => res.send('pong'));
 
 app.get('/login', (req, res) => { 
     const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`; 
+    console.log("Serving Login URL:", loginUrl);
     res.json({ url: loginUrl }); 
 });
 
@@ -70,17 +71,51 @@ app.post('/authenticate', async (req, res) => {
     }
 });
 
+// --- NEW FUNDS ENDPOINT ---
+app.get('/funds', async (req, res) => {
+    if (!flattradeToken) return res.status(401).json({ error: 'VPS: Not logged in to Flattrade' });
+    try {
+        const payload = { uid: FLATTRADE_CONFIG.user_id, actid: FLATTRADE_CONFIG.user_id };
+        // Fetch Limits from Flattrade
+        const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/Limits', payload, { 
+            headers: { Authorization: `Bearer ${flattradeToken}` } 
+        });
+
+        if (response.data.stat === "Not_Ok") {
+            console.error("Funds Fetch Failed:", response.data.emsg);
+            return res.status(400).json({ error: response.data.emsg });
+        }
+        res.json(response.data);
+    } catch (e) {
+        console.error("Funds API Error:", e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/place-order', async (req, res) => {
     if (!flattradeToken) return res.status(401).json({ error: 'VPS: Not logged in to Flattrade' });
     try {
         const orderData = req.body;
         console.log("VPS Placing Order:", orderData.symbol, orderData.type, orderData.side);
         const payload = { ...orderData, uid: FLATTRADE_CONFIG.user_id, actid: FLATTRADE_CONFIG.user_id };
-        const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/PlaceOrder', payload, { headers: { Authorization: `Bearer ${flattradeToken}` } });
+        
+        // Use Flattrade PlaceOrder API
+        const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/PlaceOrder', payload, { 
+            headers: { Authorization: `Bearer ${flattradeToken}` } 
+        });
+        
+        // Flattrade returns 200 OK even for some logical errors (stat: "Not_Ok"), so check that.
+        if (response.data.stat === "Not_Ok") {
+            console.error("Broker Rejected:", response.data.emsg);
+            return res.status(400).json({ error: response.data.emsg, details: response.data });
+        }
+
         res.json(response.data);
     } catch (e) { 
-        console.error("Order Error:", e.message); 
-        res.status(500).json({ error: e.message }); 
+        // Capture detailed broker error if available
+        const brokerError = e.response?.data?.emsg || e.response?.data?.message || JSON.stringify(e.response?.data) || e.message;
+        console.error("Order Failed:", brokerError); 
+        res.status(500).json({ error: brokerError }); 
     }
 });
 
@@ -109,7 +144,12 @@ function startWebSocket(token) {
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ VPS Server running on Port ${PORT}`);
     console.log(`✅ WebSocket running on Port ${WS_PORT}`);
-    console.log(`👉 Ensure AWS Firewall allows Ports ${PORT} and ${WS_PORT}.`);
+    
+    const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`;
+    console.log(`\n===========================================================`);
+    console.log(`🔑 MANUAL LOGIN LINK (If button fails, copy this URL):`);
+    console.log(`👉 ${loginUrl}`);
+    console.log(`===========================================================\n`);
 });
 
 // 4. CHECK FOR PORT CONFLICTS
