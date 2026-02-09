@@ -5,7 +5,7 @@ import axios from 'axios';
 import crypto from 'crypto';
 import fs from 'fs';
 
-// 1. GLOBAL ERROR HANDLERS TO PREVENT CRASHES
+// 1. GLOBAL ERROR HANDLERS
 process.on('uncaughtException', (err) => { 
     console.error('CRITICAL ERROR (Uncaught):', err); 
 });
@@ -18,8 +18,8 @@ const PORT = 5000;
 const WS_PORT = 8080;
 const TOKEN_FILE = 'session_token.json';
 
-// ⚠️⚠️⚠️ IMPORTANT: IF YOU SEE "ENTER_YOUR_..." BELOW, YOU MUST EDIT THIS FILE! ⚠️⚠️⚠️
-// Run 'nano vps-server.js' to edit these values manually.
+// ⚠️⚠️⚠️ ACTION REQUIRED: EDIT THESE KEYS MANUALLY ⚠️⚠️⚠️
+// Use 'nano vps-server.js' to edit.
 const FLATTRADE_CONFIG = {
     api_key: "ENTER_YOUR_API_KEY_HERE",
     api_secret: "ENTER_YOUR_API_SECRET_HERE",
@@ -27,13 +27,12 @@ const FLATTRADE_CONFIG = {
     redirect_url: "ENTER_YOUR_REDIRECT_URL_HERE" 
 };
 
-// 2. ENABLE CORS FOR ALL ORIGINS
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// 3. REQUEST LOGGER
+// REQUEST LOGGER
 app.use((req, res, next) => {
-    if (req.url !== '/ping') { // Don't log spammy pings
+    if (req.url !== '/ping') { 
         console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
     }
     next();
@@ -42,15 +41,15 @@ app.use((req, res, next) => {
 let flattradeToken = null;
 let marketSocket = null;
 
-// --- SESSION PERSISTENCE FUNCTIONS ---
+// --- 💾 SESSION PERSISTENCE (ONE-TIME LOGIN) ---
 function saveSession(token) {
     try {
         const data = JSON.stringify({ 
             token: token, 
-            date: new Date().toDateString() // Save date to invalidate next day
+            date: new Date().toDateString() // Expires automatically next day
         });
         fs.writeFileSync(TOKEN_FILE, data);
-        console.log("💾 Session Saved to Disk.");
+        console.log("💾 Session Saved to Disk. You are logged in for the day.");
     } catch (e) {
         console.error("Failed to save session:", e);
     }
@@ -63,16 +62,16 @@ async function restoreSession() {
         const raw = fs.readFileSync(TOKEN_FILE, 'utf8');
         const data = JSON.parse(raw);
         
-        // 1. Check Date (Tokens expire daily)
+        // Check if token is from today
         if (data.date !== new Date().toDateString()) {
-            console.log("⚠️ Old session file found (Yesterday). Ignoring.");
+            console.log("⚠️ Session expired (Yesterday). Please login again.");
             fs.unlinkSync(TOKEN_FILE);
             return;
         }
 
-        console.log("🔄 Found saved session from today. Validating...");
+        console.log("🔄 Restoring previous session...");
         
-        // 2. Validate Token with Broker API
+        // Validate Token with Broker
         if (FLATTRADE_CONFIG.user_id.includes("ENTER_YOUR")) return;
         
         const userId = FLATTRADE_CONFIG.user_id.trim();
@@ -86,7 +85,7 @@ async function restoreSession() {
             console.log("✅ SESSION RESTORED! System Online.");
             startWebSocket(flattradeToken);
         } else {
-            console.log("❌ Saved token is invalid/expired. Please login again.");
+            console.log("❌ Saved token is invalid. Please login again.");
             fs.unlinkSync(TOKEN_FILE);
         }
     } catch (e) {
@@ -96,25 +95,22 @@ async function restoreSession() {
 
 app.get('/', (req, res) => { res.send("VPS Server is Running! Status: " + (flattradeToken ? "Logged In" : "Waiting for Login")); });
 
-// Ping endpoint for health checks
+// Health Check
 app.get('/ping', (req, res) => res.send('pong'));
 
-// --- NEW AUTH CHECK ENDPOINT ---
+// Auth Check
 app.get('/check-auth', (req, res) => {
     res.json({ isLoggedIn: !!flattradeToken });
 });
 
 app.get('/login', (req, res) => { 
-    // VALIDATION: Check if keys are configured
     if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
-        console.error("❌ ERROR: API Key is not configured in vps-server.js");
         return res.status(500).json({ 
             error: "CONFIGURATION_ERROR", 
             message: "API Keys are missing. Please run 'nano vps-server.js' and enter your keys." 
         });
     }
     
-    // Trim keys just in case user added spaces in the config
     const cleanKey = FLATTRADE_CONFIG.api_key.trim();
     const loginUrl = `https://auth.flattrade.in/?app_key=${cleanKey}`; 
     console.log("Serving Login URL:", loginUrl);
@@ -124,7 +120,10 @@ app.get('/login', (req, res) => {
 app.post('/authenticate', async (req, res) => {
     const { code } = req.body;
     
-    // VALIDATION: Check if keys are configured
+    if (!code) {
+        return res.status(400).json({ error: "No Code Received", message: "The login code was missing." });
+    }
+
     if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR") || FLATTRADE_CONFIG.api_secret.includes("ENTER_YOUR")) {
          return res.status(400).json({ 
             error: "KEYS_MISSING", 
@@ -132,12 +131,14 @@ app.post('/authenticate', async (req, res) => {
         });
     }
 
-    // 🛡️ SECURITY FIX: Trim spaces from keys to prevent Hash Mismatch
+    // 🛡️ SECURITY: Strict Trim to prevent Hash Mismatch
     const cleanKey = FLATTRADE_CONFIG.api_key.trim();
     const cleanSecret = FLATTRADE_CONFIG.api_secret.trim();
     
     console.log(`\n🔑 ATTEMPTING LOGIN...`);
-    console.log(`DEBUG: API Key ends with ...${cleanKey.slice(-4)}`);
+    console.log(`DEBUG: Key Length: ${cleanKey.length} chars`);
+    console.log(`DEBUG: Secret Length: ${cleanSecret.length} chars`);
+    console.log(`DEBUG: Code Length: ${code.length} chars`);
     
     try {
         const rawString = cleanKey + code + cleanSecret;
@@ -147,9 +148,11 @@ app.post('/authenticate', async (req, res) => {
             api_key: cleanKey, 
             request_code: code, 
             api_secret: apiSecretHash 
+        }, {
+            headers: { 'Content-Type': 'application/json' }
         });
         
-        // CHECK FOR BROKER REJECTION (Explicit)
+        // 1. Explicit Broker Rejection
         if (response.data.stat === "Not_Ok") {
             console.error("❌ Broker Rejected:", response.data.emsg);
             return res.status(400).json({ 
@@ -158,60 +161,51 @@ app.post('/authenticate', async (req, res) => {
             });
         }
 
-        // CHECK FOR SUCCESS
+        // 2. Success Case
         if (response.data.token) {
             flattradeToken = response.data.token;
             console.log("✅ Login Successful. Token obtained.");
             
-            // SAVE SESSION
+            // SAVE SESSION TO DISK
             saveSession(flattradeToken);
 
             startWebSocket(flattradeToken);
             res.json({ success: true, token: flattradeToken });
         } else { 
-            // CATCH-ALL: Status was OK, but Token missing
+            // 3. Hash Mismatch Case (Empty Response)
             console.error("❌ TOKEN MISSING. Broker Response:", JSON.stringify(response.data));
             res.status(500).json({ 
                 error: "Invalid Secret or Hash Mismatch", 
                 details: {
                     message: "Broker accepted the request but did not return a token.",
-                    tip: "This usually means your API SECRET in vps-server.js is incorrect.",
-                    broker_response: response.data
+                    tip: "YOUR API SECRET IS WRONG. Please check vps-server.js",
+                    debug_info: `Key Len: ${cleanKey.length}, Secret Len: ${cleanSecret.length}`
                 }
             });
         }
     } catch (error) { 
         console.error("❌ Auth Error:", error.response?.data || error.message);
-        const errorDetails = error.response?.data || { message: error.message };
-        res.status(401).json({ error: 'Auth failed', details: errorDetails }); 
+        res.status(401).json({ error: 'Auth failed', details: error.message }); 
     }
 });
 
-// --- NEW FUNDS ENDPOINT ---
+// --- FUNDS ENDPOINT ---
 app.get('/funds', async (req, res) => {
-    if (!flattradeToken) return res.status(401).json({ error: 'VPS: Not logged in to Flattrade' });
+    if (!flattradeToken) return res.status(401).json({ error: 'Not Logged In' });
     try {
         const userId = FLATTRADE_CONFIG.user_id.trim();
-        const payload = { uid: userId, actid: userId };
-        
-        const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/Limits', payload, { 
-            headers: { Authorization: `Bearer ${flattradeToken}` } 
-        });
-
-        if (response.data.stat === "Not_Ok") {
-            console.error("Funds Fetch Failed:", response.data.emsg);
-            return res.status(400).json({ error: response.data.emsg });
-        }
+        const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/Limits', 
+            { uid: userId, actid: userId }, 
+            { headers: { Authorization: `Bearer ${flattradeToken}` } }
+        );
         res.json(response.data);
     } catch (e) {
-        console.error("Funds API Error:", e.message);
         res.status(500).json({ error: e.message });
     }
 });
 
 app.post('/place-order', async (req, res) => {
     if (!flattradeToken) {
-        console.error("❌ Order Attempt Failed: No Active Token");
         return res.status(401).json({ error: 'Not Logged In. Please login once to initialize session.' });
     }
     
@@ -222,95 +216,71 @@ app.post('/place-order', async (req, res) => {
         
         const payload = { ...orderData, uid: userId, actid: userId };
         
-        // Use Flattrade PlaceOrder API
         const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/PlaceOrder', payload, { 
             headers: { Authorization: `Bearer ${flattradeToken}` } 
         });
         
-        // Flattrade returns 200 OK even for some logical errors (stat: "Not_Ok"), so check that.
         if (response.data.stat === "Not_Ok") {
-            console.error("❌ Order Rejected by Broker:", response.data.emsg);
+            console.error("❌ Order Rejected:", response.data.emsg);
             return res.status(400).json({ error: response.data.emsg, details: response.data });
         }
         
-        console.log(`✅ Order Placed. ID: ${response.data.nordno || 'Unknown'}`);
+        console.log(`✅ Order Placed. ID: ${response.data.nordno}`);
         res.json(response.data);
     } catch (e) { 
-        // Capture detailed broker error if available
-        const brokerError = e.response?.data?.emsg || e.response?.data?.message || JSON.stringify(e.response?.data) || e.message;
-        console.error("❌ Order Failed (Network/API):", brokerError); 
-        res.status(500).json({ error: brokerError }); 
+        console.error("❌ Order Failed:", e.message); 
+        res.status(500).json({ error: e.message }); 
     }
 });
 
 const wss = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' });
 
 function startWebSocket(token) {
-    if (marketSocket) { 
-        try { marketSocket.terminate(); } catch(e) {} 
-    }
+    if (marketSocket) { try { marketSocket.terminate(); } catch(e) {} }
     
     console.log("Connecting to Broker WebSocket...");
     marketSocket = new WebSocket('wss://piconnect.flattrade.in/PiConnectTP/websocket');
     
     marketSocket.on('open', () => {
-        console.log('✅ Connected to Flattrade Market Data Stream');
+        console.log('✅ Connected to Flattrade Market Data');
         const userId = FLATTRADE_CONFIG.user_id.trim();
         const connectReq = { t: "c", uid: userId, actid: userId, source: "API" };
         marketSocket.send(JSON.stringify(connectReq));
         
-        // Subscribe to Symbols
         setTimeout(() => { 
-            const subscribeReq = { t: "t", k: "NFO|56000,NFO|56001,NFO|56002" }; // Add more IDs as needed
+            const subscribeReq = { t: "t", k: "NFO|56000,NFO|56001,NFO|56002" }; 
             marketSocket.send(JSON.stringify(subscribeReq)); 
         }, 1000);
     });
     
     marketSocket.on('message', (data) => { 
         wss.clients.forEach(client => { 
-            if (client.readyState === WebSocket.OPEN) { 
-                client.send(data.toString()); 
-            } 
+            if (client.readyState === WebSocket.OPEN) client.send(data.toString()); 
         }); 
     });
     
-    marketSocket.on('error', (err) => console.error("Flattrade WS Error:", err.message));
     marketSocket.on('close', () => {
-        console.log("Flattrade WS Closed. Reconnecting in 5s...");
+        console.log("Flattrade WS Closed. Reconnecting...");
         setTimeout(() => { if(flattradeToken) startWebSocket(flattradeToken); }, 5000);
     });
 }
 
 const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`✅ VPS Server running on Port ${PORT}`);
-    console.log(`✅ WebSocket running on Port ${WS_PORT}`);
     
-    // RESTORE SESSION ON BOOT
-    await restoreSession();
+    await restoreSession(); // 🔄 RESTORE SESSION ON BOOT
 
-    // Check Config on Startup
     if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
-        console.log(`\n❌❌❌ WARNING: API KEYS ARE NOT CONFIGURED! ❌❌❌`);
-        console.log(`Please run: nano vps-server.js`);
-        console.log(`And edit the keys manually.\n`);
+        console.log(`\n❌❌❌ API KEYS MISSING! Run 'nano vps-server.js' to edit. ❌❌❌\n`);
     } else {
         const cleanKey = FLATTRADE_CONFIG.api_key.trim();
-        const loginUrl = `https://auth.flattrade.in/?app_key=${cleanKey}`;
-        console.log(`\n===========================================================`);
-        console.log(`🔑 MANUAL LOGIN LINK (If needed):`);
-        console.log(`👉 ${loginUrl}`);
-        console.log(`===========================================================\n`);
+        console.log(`\n🔑 MANUAL LOGIN: https://auth.flattrade.in/?app_key=${cleanKey}\n`);
     }
 });
 
-// 4. CHECK FOR PORT CONFLICTS
 server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
-        console.error(`\n❌ CRITICAL ERROR: Port ${PORT} is already in use!`);
-        console.error(`   This usually means an old version of the server is still running.`);
-        console.error(`   Solution: Run 'pkill node' to stop all servers, then start again.\n`);
+        console.error(`\n❌ Port ${PORT} in use. Run 'pkill node' and try again.\n`);
         process.exit(1);
-    } else {
-        console.error("Server Error:", e);
     }
 });
