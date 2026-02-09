@@ -81,7 +81,7 @@ app.post('/authenticate', async (req, res) => {
     const cleanSecret = FLATTRADE_CONFIG.api_secret.trim();
     
     console.log(`\n🔑 ATTEMPTING LOGIN...`);
-    // console.log(`Key: ${cleanKey.substring(0,4)}... | Code: ${code} | Secret: ${cleanSecret.substring(0,4)}...`);
+    console.log(`DEBUG: API Key ends with ...${cleanKey.slice(-4)}`);
     
     try {
         const rawString = cleanKey + code + cleanSecret;
@@ -93,8 +93,6 @@ app.post('/authenticate', async (req, res) => {
             api_secret: apiSecretHash 
         });
         
-        console.log("Flattrade Auth Response:", JSON.stringify(response.data));
-
         // CHECK FOR BROKER REJECTION (Explicit)
         if (response.data.stat === "Not_Ok") {
             console.error("❌ Broker Rejected:", response.data.emsg);
@@ -111,11 +109,16 @@ app.post('/authenticate', async (req, res) => {
             startWebSocket(flattradeToken);
             res.json({ success: true, token: flattradeToken });
         } else { 
-            // CATCH-ALL: Status was OK, but Token missing (e.g., Weird Broker State)
-            console.error("❌ No token in valid response:", response.data);
+            // CATCH-ALL: Status was OK, but Token missing
+            // This specifically happens if API Secret Hash is wrong but format is valid
+            console.error("❌ TOKEN MISSING. Broker Response:", JSON.stringify(response.data));
             res.status(500).json({ 
-                error: "Broker returned Invalid Data (No Token)", 
-                details: response.data 
+                error: "Invalid Secret or Hash Mismatch", 
+                details: {
+                    message: "Broker accepted the request but did not return a token.",
+                    tip: "This usually means your API SECRET in vps-server.js is incorrect.",
+                    broker_response: response.data
+                }
             });
         }
     } catch (error) { 

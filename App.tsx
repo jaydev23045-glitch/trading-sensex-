@@ -825,6 +825,77 @@ const App: React.FC = () => {
                       </table>
                   </div>
               )}
+              {activeTab === 'TRADES' && (
+                  <div className="p-6">
+                      <div className="flex justify-between items-center mb-6">
+                          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                              <Receipt className="w-4 h-4 text-blue-500" /> Trade Ledger
+                          </h3>
+                          <div className="text-[10px] text-slate-500 bg-slate-900/50 px-3 py-1 rounded border border-slate-800">
+                              Showing all executed trades for this session
+                          </div>
+                      </div>
+
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                            <tr className="bg-slate-900/20 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800">
+                                <th className="p-4 whitespace-nowrap"><div className="flex items-center gap-1"><Clock className="w-3 h-3" /> Time / ID</div></th>
+                                <th className="p-4"><div className="flex items-center gap-1"><Layers className="w-3 h-3" /> Instrument</div></th>
+                                <th className="p-4">Side</th>
+                                <th className="p-4 text-right">Price / Qty</th>
+                                <th className="p-4 text-right">Slippage & Impact</th>
+                                <th className="p-4 text-right">Charges</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800 text-xs font-mono">
+                          {trades.length === 0 ? (
+                            <tr><td colSpan={6} className="p-12 text-center text-slate-600 font-sans italic">No trades executed yet.</td></tr>
+                          ) : (
+                            trades.map(trade => (
+                              <tr key={trade.id} className="hover:bg-slate-800/30 transition-colors">
+                                 <td className="p-4 align-top">
+                                    <div className="text-slate-300 font-bold">{trade.time}</div>
+                                    <div className="text-[10px] text-slate-600 font-mono mt-1">{trade.id}</div>
+                                 </td>
+                                 <td className="p-4 align-top">
+                                    <div className="text-white font-bold text-sm">{trade.symbol}</div>
+                                    <span className="text-[10px] font-bold bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded border border-slate-700 mt-2 inline-block">{trade.product}</span>
+                                 </td>
+                                 <td className="p-4 align-top">
+                                    <span className={`px-2 py-1 rounded text-[10px] font-black uppercase tracking-wider border ${trade.side === 'BUY' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
+                                        {trade.side}
+                                    </span>
+                                 </td>
+                                 <td className="p-4 text-right align-top">
+                                    <div className="text-white font-bold">{trade.qty} @ {trade.price.toFixed(2)}</div>
+                                    <div className="text-[10px] text-slate-500 mt-1">Val: {formatCurrency(trade.value)}</div>
+                                 </td>
+                                 <td className="p-4 text-right align-top">
+                                    <div className="flex flex-col items-end gap-1">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] text-slate-500">Exp: {trade.triggerPrice?.toFixed(2)}</span>
+                                            {/* Slippage: Positive is Green (Good), Negative is Red (Bad) */}
+                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trade.slippage >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                                {trade.slippage > 0 ? '+' : ''}{trade.slippage.toFixed(2)} Pts
+                                            </span>
+                                        </div>
+                                        {/* Total Slippage Value Impact */}
+                                        <div className={`text-[10px] ${trade.slippage >= 0 ? 'text-emerald-500/70' : 'text-rose-500/70'}`}>
+                                            {trade.slippage >= 0 ? 'Gain' : 'Loss'}: {formatCurrency(Math.abs(trade.slippage * trade.qty))}
+                                        </div>
+                                    </div>
+                                 </td>
+                                 <td className="p-4 text-right align-top">
+                                     <div className="text-rose-400 font-bold text-xs">-{formatCurrency(trade.charges)}</div>
+                                     <div className="text-[9px] text-slate-600 mt-0.5">Est. Taxes</div>
+                                 </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                  </div>
+              )}
               {activeTab === 'FUNDS' && (
                   <div className="p-6">
                       {!isConnected ? (
