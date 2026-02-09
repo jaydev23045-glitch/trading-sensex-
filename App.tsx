@@ -67,22 +67,32 @@ const App: React.FC = () => {
   const [backendError, setBackendError] = useState<string | null>("Checking connection...");
   const [isLoadingFunds, setIsLoadingFunds] = useState(false);
 
-  // 1. HEALTH CHECK INTERVAL
+  // 1. ROBUST CONNECTION CHECK (Health + Auth)
   useEffect(() => {
-    const checkHealth = async () => {
+    const checkConnection = async () => {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000);
+        
+        // Check 1: VPS Alive?
         await fetch(`${API_BASE}/ping`, { signal: controller.signal });
+        
+        // Check 2: Broker Logged In?
+        const authRes = await fetch(`${API_BASE}/check-auth`, { signal: controller.signal });
+        const authData = await authRes.json();
+        
         clearTimeout(timeoutId);
+        
         setBackendError(null);
+        setIsConnected(authData.isLoggedIn === true);
       } catch (e) {
         setBackendError("VPS SERVER OFFLINE");
+        setIsConnected(false);
       }
     };
 
-    checkHealth(); // Initial check
-    const interval = setInterval(checkHealth, 5000); // Poll every 5 seconds
+    checkConnection(); // Initial check
+    const interval = setInterval(checkConnection, 2000); // Check often to sync UI state
     return () => clearInterval(interval);
   }, []);
 
@@ -127,7 +137,7 @@ const App: React.FC = () => {
     const connect = () => {
         try {
             ws = new WebSocket(WS_URL);
-            ws.onopen = () => { setIsConnected(true); console.log("Connected to Backend Socket"); };
+            ws.onopen = () => { console.log("Connected to Backend Socket"); };
             ws.onmessage = (event) => {
               try {
                 const data = JSON.parse(event.data);
@@ -161,9 +171,7 @@ const App: React.FC = () => {
                 setRenderTrigger(prev => prev + 1);
               } catch (e) {}
             };
-            ws.onclose = () => { setIsConnected(false); };
-            ws.onerror = () => { setIsConnected(false); };
-        } catch (e) { setIsConnected(false); }
+        } catch (e) { console.error("WS Error", e); }
     };
 
     connect();
@@ -292,6 +300,11 @@ const App: React.FC = () => {
   };
 
   const handleBuy = async (type: 'CE' | 'PE') => {
+    if (!isConnected) {
+        alert("⚠️ BROKER NOT CONNECTED\n\nPlease click the 'LOGIN BROKER' button at the top right to start trading.");
+        return;
+    }
+
     const strike = type === 'CE' ? selectedCeStrike : selectedPeStrike;
     const reqPrice = parseFloat(type === 'CE' ? ceEntryPrice : peEntryPrice);
     const orderQty = config.baseQty;
@@ -376,6 +389,7 @@ const App: React.FC = () => {
   };
 
   const handleManualExit = async (id: string) => {
+    if (!isConnected) return;
     const pos = stateRef.current.positions.find(p => p.id === id);
     if (!pos || pos.status === 'CLOSED') return;
     
@@ -586,11 +600,19 @@ const App: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
            <div className="bg-[#0f172a] rounded-xl border border-slate-800 p-6 flex flex-col gap-6 relative overflow-hidden">
               <div className="flex justify-between items-start z-10"><div className="flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-500" /><h2 className="text-lg font-black text-emerald-500 uppercase tracking-tighter">CE Strike</h2></div><div className="text-right"><div className="text-[10px] font-bold text-slate-500 uppercase">LTP (Live)</div><div className="text-xl font-bold font-mono text-white">{ceLtp > 0 ? ceLtp.toFixed(2) : '--'}</div></div></div>
-              <div className="space-y-4 z-10"><NumberInput label="CE Strike" value={selectedCeStrike} onChange={(e) => setSelectedCeStrike(e.target.value)} placeholder="e.g. 82000" /><div className="relative"><NumberInput label="Entry Price" value={ceEntryPrice} onChange={(e) => setCeEntryPrice(e.target.value)} placeholder="0 for Market" className="text-emerald-500 border-emerald-500/20 focus:border-emerald-500" /></div><button onClick={() => handleBuy('CE')} className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest rounded-lg shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2"><Play className="w-4 h-4 fill-current" /> Buy CE</button></div>
+              <div className="space-y-4 z-10"><NumberInput label="CE Strike" value={selectedCeStrike} onChange={(e) => setSelectedCeStrike(e.target.value)} placeholder="e.g. 82000" /><div className="relative"><NumberInput label="Entry Price" value={ceEntryPrice} onChange={(e) => setCeEntryPrice(e.target.value)} placeholder="0 for Market" className="text-emerald-500 border-emerald-500/20 focus:border-emerald-500" /></div>
+              <button onClick={() => handleBuy('CE')} disabled={!isConnected} className={`w-full py-4 font-black uppercase tracking-widest rounded-lg shadow-lg transition-all flex items-center justify-center gap-2 ${!isConnected ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-500/20'}`}>
+                <Play className="w-4 h-4 fill-current" /> Buy CE
+              </button>
+              </div>
            </div>
            <div className="bg-[#0f172a] rounded-xl border border-slate-800 p-6 flex flex-col gap-6 relative overflow-hidden">
               <div className="flex justify-between items-start z-10"><div className="flex items-center gap-2"><TrendingDown className="w-5 h-5 text-rose-500" /><h2 className="text-lg font-black text-rose-500 uppercase tracking-tighter">PE Strike</h2></div><div className="text-right"><div className="text-[10px] font-bold text-slate-500 uppercase">LTP (Live)</div><div className="text-xl font-bold font-mono text-white">{peLtp > 0 ? peLtp.toFixed(2) : '--'}</div></div></div>
-              <div className="space-y-4 z-10"><NumberInput label="PE Strike" value={selectedPeStrike} onChange={(e) => setSelectedPeStrike(e.target.value)} placeholder="e.g. 82000" /><div className="relative"><NumberInput label="Entry Price" value={peEntryPrice} onChange={(e) => setPeEntryPrice(e.target.value)} placeholder="0 for Market" className="text-rose-500 border-rose-500/20 focus:border-rose-500" /></div><button onClick={() => handleBuy('PE')} className="w-full py-4 bg-rose-600 hover:bg-rose-500 text-white font-black uppercase tracking-widest rounded-lg shadow-lg shadow-rose-500/20 transition-all flex items-center justify-center gap-2"><Play className="w-4 h-4 fill-current" /> Buy PE</button></div>
+              <div className="space-y-4 z-10"><NumberInput label="PE Strike" value={selectedPeStrike} onChange={(e) => setSelectedPeStrike(e.target.value)} placeholder="e.g. 82000" /><div className="relative"><NumberInput label="Entry Price" value={peEntryPrice} onChange={(e) => setPeEntryPrice(e.target.value)} placeholder="0 for Market" className="text-rose-500 border-rose-500/20 focus:border-rose-500" /></div>
+              <button onClick={() => handleBuy('PE')} disabled={!isConnected} className={`w-full py-4 font-black uppercase tracking-widest rounded-lg shadow-lg transition-all flex items-center justify-center gap-2 ${!isConnected ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-500/20'}`}>
+                <Play className="w-4 h-4 fill-current" /> Buy PE
+              </button>
+              </div>
            </div>
         </div>
         <div className="bg-[#0f172a] rounded-xl border border-slate-800 overflow-hidden min-h-[400px]">

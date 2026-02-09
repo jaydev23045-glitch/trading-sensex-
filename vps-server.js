@@ -41,6 +41,11 @@ app.get('/', (req, res) => { res.send("VPS Server is Running! Status: " + (flatt
 // Ping endpoint for health checks
 app.get('/ping', (req, res) => res.send('pong'));
 
+// --- NEW AUTH CHECK ENDPOINT ---
+app.get('/check-auth', (req, res) => {
+    res.json({ isLoggedIn: !!flattradeToken });
+});
+
 app.get('/login', (req, res) => { 
     const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`; 
     console.log("Serving Login URL:", loginUrl);
