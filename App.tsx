@@ -841,7 +841,14 @@ const App: React.FC = () => {
                            <div className="flex flex-col items-center justify-center p-12 text-slate-500 bg-slate-800/20 rounded-lg border border-slate-800 border-dashed">
                                <WifiOff className="w-12 h-12 mb-4 opacity-50" />
                                <h3 className="text-lg font-bold text-slate-400">Broker Disconnected</h3>
-                               <p className="text-sm">Please login to view account funds.</p>
+                               <p className="text-sm mb-6">Please login to view account funds.</p>
+                               <button 
+                                  onClick={handleLogin} 
+                                  disabled={isLoggingIn || !!backendError}
+                                  className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded shadow-lg transition-all"
+                               >
+                                  {isLoggingIn ? 'Connecting...' : 'LOGIN NOW'}
+                               </button>
                            </div>
                       ) : (
                         <div className="space-y-6">
