@@ -16,6 +16,8 @@ const app = express();
 const PORT = 5000;
 const WS_PORT = 8080;
 
+// ⚠️⚠️⚠️ IMPORTANT: IF YOU SEE "ENTER_YOUR_..." BELOW, YOU MUST EDIT THIS FILE! ⚠️⚠️⚠️
+// Run 'nano vps-server.js' to edit these values manually.
 const FLATTRADE_CONFIG = {
     api_key: "ENTER_YOUR_API_KEY_HERE",
     api_secret: "ENTER_YOUR_API_SECRET_HERE",
@@ -47,6 +49,15 @@ app.get('/check-auth', (req, res) => {
 });
 
 app.get('/login', (req, res) => { 
+    // VALIDATION: Check if keys are configured
+    if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
+        console.error("❌ ERROR: API Key is not configured in vps-server.js");
+        return res.status(500).json({ 
+            error: "CONFIGURATION_ERROR", 
+            message: "API Keys are missing. Please run 'nano vps-server.js' and enter your keys." 
+        });
+    }
+    
     const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`; 
     console.log("Serving Login URL:", loginUrl);
     res.json({ url: loginUrl }); 
@@ -54,14 +65,27 @@ app.get('/login', (req, res) => {
 
 app.post('/authenticate', async (req, res) => {
     const { code } = req.body;
+    
+    // VALIDATION: Check if keys are configured
+    if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR") || FLATTRADE_CONFIG.api_secret.includes("ENTER_YOUR")) {
+         return res.status(400).json({ 
+            error: "KEYS_MISSING", 
+            details: { emsg: "You have not entered your API Keys in vps-server.js. Please edit the file manually." } 
+        });
+    }
+
+    console.log(`\n🔑 ATTEMPTING LOGIN...`);
+    
     try {
         const rawString = FLATTRADE_CONFIG.api_key + code + FLATTRADE_CONFIG.api_secret;
         const apiSecretHash = crypto.createHash('sha256').update(rawString).digest('hex');
+        
         const response = await axios.post('https://authapi.flattrade.in/auth/session', { 
             api_key: FLATTRADE_CONFIG.api_key, 
             request_code: code, 
             api_secret: apiSecretHash 
         });
+
         if (response.data.token) {
             flattradeToken = response.data.token;
             console.log("✅ Login Successful. Token obtained.");
@@ -71,8 +95,9 @@ app.post('/authenticate', async (req, res) => {
             throw new Error("No token in response"); 
         }
     } catch (error) { 
-        console.error("Auth Error:", error.response?.data || error.message);
-        res.status(500).json({ error: 'Auth failed', details: error.response?.data || error.message }); 
+        console.error("❌ Auth Error:", error.response?.data || error.message);
+        const errorDetails = error.response?.data || { message: error.message };
+        res.status(401).json({ error: 'Auth failed', details: errorDetails }); 
     }
 });
 
@@ -150,11 +175,18 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ VPS Server running on Port ${PORT}`);
     console.log(`✅ WebSocket running on Port ${WS_PORT}`);
     
-    const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`;
-    console.log(`\n===========================================================`);
-    console.log(`🔑 MANUAL LOGIN LINK (If button fails, copy this URL):`);
-    console.log(`👉 ${loginUrl}`);
-    console.log(`===========================================================\n`);
+    // Check Config on Startup
+    if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
+        console.log(`\n❌❌❌ WARNING: API KEYS ARE NOT CONFIGURED! ❌❌❌`);
+        console.log(`Please run: nano vps-server.js`);
+        console.log(`And edit the keys manually.\n`);
+    } else {
+        const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`;
+        console.log(`\n===========================================================`);
+        console.log(`🔑 MANUAL LOGIN LINK:`);
+        console.log(`👉 ${loginUrl}`);
+        console.log(`===========================================================\n`);
+    }
 });
 
 // 4. CHECK FOR PORT CONFLICTS

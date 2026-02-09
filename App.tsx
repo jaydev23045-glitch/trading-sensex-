@@ -116,7 +116,9 @@ const App: React.FC = () => {
                     setBackendError(null);
                     alert("✅ Login Successful! Connected to Flattrade.");
                 } else {
-                    alert("❌ Login Failed: " + JSON.stringify(data.error));
+                    // Show detailed error from Broker
+                    const errorMsg = data.details?.emsg || data.details?.message || JSON.stringify(data.details) || data.error;
+                    alert("❌ Login Failed: " + errorMsg);
                 }
             } catch (e) {
                 console.error(e);
