@@ -327,7 +327,7 @@ const App: React.FC = () => {
 
   const handleBuy = async (type: 'CE' | 'PE') => {
     if (!isConnected) {
-        alert("⚠️ BROKER NOT CONNECTED\n\nPlease click the 'LOGIN BROKER' button at the top right to start trading.");
+        alert("⚠️ BROKER NOT CONNECTED\n\nPlease click the 'LOGIN BROKER' button at the top right to start trading.\n\nIf you have already logged in today, wait for the session to auto-restore.");
         return;
     }
 
