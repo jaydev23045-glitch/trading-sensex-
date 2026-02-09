@@ -135,8 +135,15 @@ const App: React.FC = () => {
                 setBackendError(null);
                 setShowSuccessModal(true); // Show Success Modal
             } else {
-                const errorMsg = data.details?.emsg || data.details?.message || JSON.stringify(data.details) || data.error;
-                alert("❌ LOGIN FAILED\n\nBroker Response: " + errorMsg);
+                // Formatting for better readability of the error
+                let errorDetails = "";
+                if (data.details && typeof data.details === 'object') {
+                    errorDetails = JSON.stringify(data.details, null, 2);
+                } else {
+                    errorDetails = data.details || data.error;
+                }
+                
+                alert(`❌ LOGIN FAILED\n\nServer Response:\n${errorDetails}`);
             }
         } catch (e) {
             console.error(e);

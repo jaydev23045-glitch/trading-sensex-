@@ -58,7 +58,9 @@ app.get('/login', (req, res) => {
         });
     }
     
-    const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`; 
+    // Trim keys just in case user added spaces in the config
+    const cleanKey = FLATTRADE_CONFIG.api_key.trim();
+    const loginUrl = `https://auth.flattrade.in/?app_key=${cleanKey}`; 
     console.log("Serving Login URL:", loginUrl);
     res.json({ url: loginUrl }); 
 });
@@ -74,34 +76,47 @@ app.post('/authenticate', async (req, res) => {
         });
     }
 
+    // 🛡️ SECURITY FIX: Trim spaces from keys to prevent Hash Mismatch
+    const cleanKey = FLATTRADE_CONFIG.api_key.trim();
+    const cleanSecret = FLATTRADE_CONFIG.api_secret.trim();
+    
     console.log(`\n🔑 ATTEMPTING LOGIN...`);
+    // console.log(`Key: ${cleanKey.substring(0,4)}... | Code: ${code} | Secret: ${cleanSecret.substring(0,4)}...`);
     
     try {
-        const rawString = FLATTRADE_CONFIG.api_key + code + FLATTRADE_CONFIG.api_secret;
+        const rawString = cleanKey + code + cleanSecret;
         const apiSecretHash = crypto.createHash('sha256').update(rawString).digest('hex');
         
         const response = await axios.post('https://authapi.flattrade.in/auth/session', { 
-            api_key: FLATTRADE_CONFIG.api_key, 
+            api_key: cleanKey, 
             request_code: code, 
             api_secret: apiSecretHash 
         });
         
-        console.log("Flattrade Auth Response:", response.data);
+        console.log("Flattrade Auth Response:", JSON.stringify(response.data));
 
-        // CHECK FOR BROKER REJECTION
+        // CHECK FOR BROKER REJECTION (Explicit)
         if (response.data.stat === "Not_Ok") {
             console.error("❌ Broker Rejected:", response.data.emsg);
-            return res.status(400).json({ error: response.data.emsg, details: response.data });
+            return res.status(400).json({ 
+                error: response.data.emsg, 
+                details: response.data 
+            });
         }
 
+        // CHECK FOR SUCCESS
         if (response.data.token) {
             flattradeToken = response.data.token;
             console.log("✅ Login Successful. Token obtained.");
             startWebSocket(flattradeToken);
             res.json({ success: true, token: flattradeToken });
         } else { 
+            // CATCH-ALL: Status was OK, but Token missing (e.g., Weird Broker State)
             console.error("❌ No token in valid response:", response.data);
-            res.status(500).json({ error: "No token in response", details: response.data });
+            res.status(500).json({ 
+                error: "Broker returned Invalid Data (No Token)", 
+                details: response.data 
+            });
         }
     } catch (error) { 
         console.error("❌ Auth Error:", error.response?.data || error.message);
@@ -114,8 +129,9 @@ app.post('/authenticate', async (req, res) => {
 app.get('/funds', async (req, res) => {
     if (!flattradeToken) return res.status(401).json({ error: 'VPS: Not logged in to Flattrade' });
     try {
-        const payload = { uid: FLATTRADE_CONFIG.user_id, actid: FLATTRADE_CONFIG.user_id };
-        // Fetch Limits from Flattrade
+        const userId = FLATTRADE_CONFIG.user_id.trim();
+        const payload = { uid: userId, actid: userId };
+        
         const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/Limits', payload, { 
             headers: { Authorization: `Bearer ${flattradeToken}` } 
         });
@@ -135,8 +151,10 @@ app.post('/place-order', async (req, res) => {
     if (!flattradeToken) return res.status(401).json({ error: 'VPS: Not logged in to Flattrade' });
     try {
         const orderData = req.body;
+        const userId = FLATTRADE_CONFIG.user_id.trim();
         console.log("VPS Placing Order:", orderData.symbol, orderData.type, orderData.side);
-        const payload = { ...orderData, uid: FLATTRADE_CONFIG.user_id, actid: FLATTRADE_CONFIG.user_id };
+        
+        const payload = { ...orderData, uid: userId, actid: userId };
         
         // Use Flattrade PlaceOrder API
         const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/PlaceOrder', payload, { 
@@ -165,7 +183,8 @@ function startWebSocket(token) {
     marketSocket = new WebSocket('wss://piconnect.flattrade.in/PiConnectTP/websocket');
     marketSocket.on('open', () => {
         console.log('✅ VPS connected to Flattrade Market Data');
-        const connectReq = { t: "c", uid: FLATTRADE_CONFIG.user_id, actid: FLATTRADE_CONFIG.user_id, source: "API" };
+        const userId = FLATTRADE_CONFIG.user_id.trim();
+        const connectReq = { t: "c", uid: userId, actid: userId, source: "API" };
         marketSocket.send(JSON.stringify(connectReq));
         setTimeout(() => { const subscribeReq = { t: "t", k: "NFO|56000,NFO|56001" }; marketSocket.send(JSON.stringify(subscribeReq)); }, 1000);
     });
@@ -190,7 +209,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
         console.log(`Please run: nano vps-server.js`);
         console.log(`And edit the keys manually.\n`);
     } else {
-        const loginUrl = `https://auth.flattrade.in/?app_key=${FLATTRADE_CONFIG.api_key}`;
+        const cleanKey = FLATTRADE_CONFIG.api_key.trim();
+        const loginUrl = `https://auth.flattrade.in/?app_key=${cleanKey}`;
         console.log(`\n===========================================================`);
         console.log(`🔑 MANUAL LOGIN LINK:`);
         console.log(`👉 ${loginUrl}`);
