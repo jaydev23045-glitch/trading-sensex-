@@ -85,6 +85,14 @@ app.post('/authenticate', async (req, res) => {
             request_code: code, 
             api_secret: apiSecretHash 
         });
+        
+        console.log("Flattrade Auth Response:", response.data);
+
+        // CHECK FOR BROKER REJECTION
+        if (response.data.stat === "Not_Ok") {
+            console.error("❌ Broker Rejected:", response.data.emsg);
+            return res.status(400).json({ error: response.data.emsg, details: response.data });
+        }
 
         if (response.data.token) {
             flattradeToken = response.data.token;
@@ -92,7 +100,8 @@ app.post('/authenticate', async (req, res) => {
             startWebSocket(flattradeToken);
             res.json({ success: true, token: flattradeToken });
         } else { 
-            throw new Error("No token in response"); 
+            console.error("❌ No token in valid response:", response.data);
+            res.status(500).json({ error: "No token in response", details: response.data });
         }
     } catch (error) { 
         console.error("❌ Auth Error:", error.response?.data || error.message);

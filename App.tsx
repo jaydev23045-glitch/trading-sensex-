@@ -3,7 +3,7 @@ import {
   Settings, Zap, TrendingUp, TrendingDown, Layers, ArrowUpRight,
   Shield, Play, Target, ChevronDown, ChevronUp, AlertTriangle, RefreshCw,
   Clock, FileText, CheckCircle2, XCircle, AlertCircle, History, Wallet, PieChart, ArrowRightCircle, WifiOff,
-  Calculator, Receipt, Filter, Copy, Wifi
+  Calculator, Receipt, Filter, Copy, Wifi, Check
 } from 'lucide-react';
 import { NumberInput } from './components/ui/Input';
 import { StatusBadge } from './components/ui/StatusBadge';
@@ -66,6 +66,7 @@ const App: React.FC = () => {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [backendError, setBackendError] = useState<string | null>("Checking connection...");
   const [isLoadingFunds, setIsLoadingFunds] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   // 1. ROBUST CONNECTION CHECK (Health + Auth)
   useEffect(() => {
@@ -104,40 +105,44 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleAuthCallback = async () => {
+        // 1. GET CODE
         const params = new URLSearchParams(window.location.search);
         const code = params.get('code'); 
         
-        // Only proceed if code exists AND we haven't tried yet
-        if (code && !authAttempted.current) {
-            authAttempted.current = true;
-            setIsLoggingIn(true);
-            
-            try {
-                console.log("Sending Auth Code to VPS...");
-                const response = await fetch(`${API_BASE}/authenticate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code })
-                });
-                const data = await response.json();
-                
-                // Clean URL only after we get a response
-                window.history.replaceState({}, document.title, window.location.pathname);
+        if (!code) return; // Exit if no code found
 
-                if (data.success) {
-                    setIsConnected(true);
-                    setBackendError(null);
-                    alert("✅ SYSTEM ONLINE\n\nBroker connected successfully. Trading is now active.");
-                } else {
-                    const errorMsg = data.details?.emsg || data.details?.message || JSON.stringify(data.details) || data.error;
-                    alert("❌ LOGIN FAILED\n\nBroker Response: " + errorMsg);
-                }
-            } catch (e) {
-                console.error(e);
-                alert(`❌ CONNECTION ERROR\n\nCould not reach VPS Server at ${API_BASE}. Check if server is running.`);
-            } finally {
-                setIsLoggingIn(false);
+        // 2. IMMEDIATE CLEANUP: Remove code from URL *BEFORE* async fetch.
+        // This prevents React StrictMode from trying to use the same code twice.
+        window.history.replaceState({}, document.title, window.location.pathname);
+        
+        // 3. Prevent double-submission guard
+        if (authAttempted.current) return;
+        authAttempted.current = true;
+        
+        setIsLoggingIn(true);
+        
+        try {
+            console.log("Sending Auth Code to VPS...");
+            const response = await fetch(`${API_BASE}/authenticate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                setIsConnected(true);
+                setBackendError(null);
+                setShowSuccessModal(true); // Show Success Modal
+            } else {
+                const errorMsg = data.details?.emsg || data.details?.message || JSON.stringify(data.details) || data.error;
+                alert("❌ LOGIN FAILED\n\nBroker Response: " + errorMsg);
             }
+        } catch (e) {
+            console.error(e);
+            alert(`❌ CONNECTION ERROR\n\nCould not reach VPS Server at ${API_BASE}. Check if server is running.`);
+        } finally {
+            setIsLoggingIn(false);
         }
     };
     handleAuthCallback();
@@ -490,7 +495,41 @@ const App: React.FC = () => {
   });
 
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-300 font-sans selection:bg-blue-500/30 pb-10">
+    <div className="min-h-screen bg-[#020617] text-slate-300 font-sans selection:bg-blue-500/30 pb-10 relative">
+      
+      {/* SUCCESS MODAL OVERLAY */}
+      {showSuccessModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-300">
+            <div className="bg-[#0f172a] border border-emerald-500/30 p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center relative overflow-hidden transform transition-all scale-100">
+                {/* Decorative Glow */}
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-green-400"></div>
+                <div className="absolute -top-10 -right-10 w-32 h-32 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+                <div className="mx-auto w-20 h-20 bg-emerald-500/10 rounded-full flex items-center justify-center mb-6 ring-1 ring-emerald-500/30">
+                    <CheckCircle2 className="w-10 h-10 text-emerald-500 drop-shadow-lg" />
+                </div>
+                
+                <h2 className="text-2xl font-black text-white mb-2 tracking-tight">Login Successful</h2>
+                <div className="flex items-center justify-center gap-2 mb-6">
+                    <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-bold rounded-full border border-emerald-500/20">
+                        API V2 CONNECTED
+                    </span>
+                </div>
+                
+                <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+                    Secure connection established with Flattrade. <br/>You are now ready to execute trades.
+                </p>
+                
+                <button 
+                    onClick={() => setShowSuccessModal(false)} 
+                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20 active:scale-95 flex items-center justify-center gap-2"
+                >
+                    CONTINUE TO DASHBOARD <ArrowRightCircle className="w-4 h-4" />
+                </button>
+            </div>
+        </div>
+      )}
+
       <header className="h-16 border-b border-slate-800/50 bg-[#020617]/80 backdrop-blur-md sticky top-0 z-50 px-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Zap className="w-6 h-6 text-blue-500 fill-blue-500/20" />
@@ -778,62 +817,6 @@ const App: React.FC = () => {
                         </tbody>
                       </table>
                   </div>
-              )}
-              {activeTab === 'TRADES' && (
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                        <tr className="bg-slate-900/20 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800">
-                            <th className="p-4"><div className="flex items-center gap-1"><History className="w-3 h-3" /> Time</div></th>
-                            <th className="p-4">Instrument</th>
-                            <th className="p-4">Type</th>
-                            <th className="p-4 text-right">Details</th>
-                            <th className="p-4 text-right">Execution</th>
-                            <th className="p-4 text-right">Net Value</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800 text-xs font-mono">
-                      {trades.length === 0 ? (
-                        <tr><td colSpan={6} className="p-12 text-center text-slate-600 font-sans italic">No trades recorded yet.</td></tr>
-                      ) : (
-                        trades.map(trade => {
-                            const isBuy = trade.side === 'BUY';
-                            
-                            return (
-                          <tr key={trade.id} className="hover:bg-slate-800/30 transition-colors group">
-                             <td className="p-4 align-top text-slate-400">{trade.time}</td>
-                             <td className="p-4 align-top">
-                                <div className="text-white font-bold">{trade.symbol}</div>
-                                <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1"><Receipt className="w-3 h-3" /> ID: {trade.orderId}</div>
-                             </td>
-                             <td className="p-4 align-top">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${isBuy ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
-                                    {trade.side}
-                                </span>
-                             </td>
-                             <td className="p-4 text-right align-top">
-                                <div className="text-white font-bold">{trade.qty} Qty</div>
-                                <div className="text-[10px] text-slate-500 mt-1">Trig: {trade.triggerPrice?.toFixed(2)}</div>
-                             </td>
-                             <td className="p-4 text-right align-top">
-                                <div className="text-white font-bold">{trade.price.toFixed(2)}</div>
-                                {trade.slippage !== undefined && (
-                                    <div className={`text-[10px] mt-1 font-bold flex items-center justify-end gap-1 ${trade.slippage > 0 ? 'text-emerald-500' : trade.slippage < 0 ? 'text-rose-500' : 'text-slate-500'}`}>
-                                        {trade.slippage > 0 ? <TrendingUp className="w-3 h-3" /> : trade.slippage < 0 ? <AlertTriangle className="w-3 h-3" /> : null}
-                                        {trade.slippage > 0 ? '+' : ''}{trade.slippage.toFixed(2)} Slip
-                                    </div>
-                                )}
-                             </td>
-                             <td className="p-4 text-right align-top">
-                                <div className="text-slate-300 font-bold">{formatCurrency(trade.value)}</div>
-                                <div className="text-[10px] text-slate-500 mt-1" title="Includes Exchange Txn, STT, GST, Stamp Duty">
-                                    Tax: -{formatCurrency(trade.charges || 0)}
-                                </div>
-                             </td>
-                          </tr>
-                        )})
-                      )}
-                    </tbody>
-                  </table>
               )}
               {activeTab === 'FUNDS' && (
                   <div className="p-6">
