@@ -159,29 +159,64 @@ const App: React.FC = () => {
             ws.onopen = () => { console.log("Connected to Backend Socket"); };
             ws.onmessage = (event) => {
               try {
-                const data = JSON.parse(event.data);
+                // Parse Incoming Data (Handle Array or Object)
+                const rawData = JSON.parse(event.data);
+                const updates = Array.isArray(rawData) ? rawData : [rawData];
+                let shouldUpdateUI = false;
                 const now = Date.now();
-                if (data.symbol === selectedIndex) setSpotPrice(data.lp); 
-                if (data.symbol.includes('CE')) stateRef.current.ceLtp = data.lp;
-                if (data.symbol.includes('PE')) stateRef.current.peLtp = data.lp;
-                if (data.timestamp) setLatency(now - data.timestamp);
 
-                let unrealizedMtm = 0;
-                let realizedMtm = 0;
-                stateRef.current.positions.forEach(pos => {
-                    if (pos.status === 'OPEN') {
-                        const liveLtp = pos.type === 'CE' ? stateRef.current.ceLtp : stateRef.current.peLtp;
-                        if (liveLtp > 0) {
-                            pos.ltp = liveLtp;
-                            pos.pnl = (liveLtp - pos.avgPrice) * pos.qty;
+                updates.forEach(data => {
+                    // Try to find Symbol and LTP in various common formats
+                    const symbolStr = data.symbol || data.ts || "";
+                    const price = parseFloat(data.lp || data.ltp || "0");
+
+                    if (price > 0 && typeof symbolStr === 'string') {
+                        // SPOT PRICE UPDATE
+                        if (symbolStr === selectedIndex) {
+                            setSpotPrice(price);
+                            shouldUpdateUI = true;
                         }
-                        unrealizedMtm += pos.pnl;
+                        
+                        // CE OPTION UPDATE
+                        if (symbolStr.includes('CE')) {
+                            stateRef.current.ceLtp = price;
+                            shouldUpdateUI = true;
+                        }
+
+                        // PE OPTION UPDATE
+                        if (symbolStr.includes('PE')) {
+                            stateRef.current.peLtp = price;
+                            shouldUpdateUI = true;
+                        }
                     }
-                    realizedMtm += (pos.realizedPnl || 0);
+
+                    // LATENCY CALCULATION
+                    if (data.timestamp) setLatency(now - data.timestamp);
                 });
-                stateRef.current.stats.totalMtm = realizedMtm + unrealizedMtm;
-                setRenderTrigger(prev => prev + 1);
-              } catch (e) {}
+
+                // RECALCULATE PNL IF PRICES CHANGED
+                if (shouldUpdateUI) {
+                    let unrealizedMtm = 0;
+                    let realizedMtm = 0;
+                    
+                    stateRef.current.positions.forEach(pos => {
+                        if (pos.status === 'OPEN') {
+                            const liveLtp = pos.type === 'CE' ? stateRef.current.ceLtp : stateRef.current.peLtp;
+                            if (liveLtp > 0) {
+                                pos.ltp = liveLtp;
+                                pos.pnl = (liveLtp - pos.avgPrice) * pos.qty;
+                            }
+                            unrealizedMtm += pos.pnl;
+                        }
+                        realizedMtm += (pos.realizedPnl || 0);
+                    });
+                    
+                    stateRef.current.stats.totalMtm = realizedMtm + unrealizedMtm;
+                    setRenderTrigger(prev => prev + 1);
+                }
+              } catch (e) { 
+                  // console.error("WS Parse Error", e); 
+              }
             };
         } catch (e) { console.error("WS Error", e); }
     };
