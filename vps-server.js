@@ -18,8 +18,7 @@ const PORT = 5000;
 const WS_PORT = 8080;
 const TOKEN_FILE = 'session_token.json';
 
-// ⚠️⚠️⚠️ ACTION REQUIRED: EDIT THESE KEYS MANUALLY ⚠️⚠️⚠️
-// Use 'nano vps-server.js' to edit.
+// ⚠️KEYS ARE MANAGED BY CONFIGURE.JS NOW⚠️
 const FLATTRADE_CONFIG = {
     api_key: "ENTER_YOUR_API_KEY_HERE",
     api_secret: "ENTER_YOUR_API_SECRET_HERE",
@@ -49,7 +48,7 @@ function saveSession(token) {
             date: new Date().toDateString() // Expires automatically next day
         });
         fs.writeFileSync(TOKEN_FILE, data);
-        console.log("💾 Session Saved to Disk. You are logged in for the day.");
+        console.log("💾 Session Saved. Auto-Login enabled for today.");
     } catch (e) {
         console.error("Failed to save session:", e);
     }
@@ -107,7 +106,7 @@ app.get('/login', (req, res) => {
     if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
         return res.status(500).json({ 
             error: "CONFIGURATION_ERROR", 
-            message: "API Keys are missing. Please run 'nano vps-server.js' and enter your keys." 
+            message: "API Keys are missing. Please run 'node configure.js' in terminal." 
         });
     }
     
@@ -124,22 +123,33 @@ app.post('/authenticate', async (req, res) => {
         return res.status(400).json({ error: "No Code Received", message: "The login code was missing." });
     }
 
-    if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR") || FLATTRADE_CONFIG.api_secret.includes("ENTER_YOUR")) {
+    if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
          return res.status(400).json({ 
             error: "KEYS_MISSING", 
-            details: { emsg: "You have not entered your API Keys in vps-server.js. Please edit the file manually." } 
+            details: { emsg: "API Keys are missing. Run 'node configure.js' in VPS terminal." } 
         });
     }
 
-    // 🛡️ SECURITY: Strict Trim to prevent Hash Mismatch
+    // 🛡️ SECURITY: Strict Trim
     const cleanKey = FLATTRADE_CONFIG.api_key.trim();
     const cleanSecret = FLATTRADE_CONFIG.api_secret.trim();
     
     console.log(`\n🔑 ATTEMPTING LOGIN...`);
-    console.log(`DEBUG: Key Length: ${cleanKey.length} chars`);
-    console.log(`DEBUG: Secret Length: ${cleanSecret.length} chars`);
-    console.log(`DEBUG: Code Length: ${code.length} chars`);
     
+    // DEBUGGING INVALID KEYS
+    if (cleanSecret.length > 40) {
+        console.error(`❌ FATAL ERROR: API SECRET IS TOO LONG (${cleanSecret.length} chars)`);
+        console.error("   It should be 32 chars. You likely pasted the wrong thing.");
+        return res.status(500).json({
+            error: "CONFIGURATION_ERROR",
+            details: {
+                message: "Your API Secret is invalid (Too Long).",
+                tip: "Please run 'node configure.js' to fix this.",
+                debug_info: `Secret Len: ${cleanSecret.length} (Expected: 32)`
+            }
+        });
+    }
+
     try {
         const rawString = cleanKey + code + cleanSecret;
         const apiSecretHash = crypto.createHash('sha256').update(rawString).digest('hex');
@@ -172,13 +182,13 @@ app.post('/authenticate', async (req, res) => {
             startWebSocket(flattradeToken);
             res.json({ success: true, token: flattradeToken });
         } else { 
-            // 3. Hash Mismatch Case (Empty Response)
+            // 3. Hash Mismatch Case
             console.error("❌ TOKEN MISSING. Broker Response:", JSON.stringify(response.data));
             res.status(500).json({ 
                 error: "Invalid Secret or Hash Mismatch", 
                 details: {
                     message: "Broker accepted the request but did not return a token.",
-                    tip: "YOUR API SECRET IS WRONG. Please check vps-server.js",
+                    tip: "Run 'node configure.js' to reset your keys.",
                     debug_info: `Key Len: ${cleanKey.length}, Secret Len: ${cleanSecret.length}`
                 }
             });
@@ -189,7 +199,6 @@ app.post('/authenticate', async (req, res) => {
     }
 });
 
-// --- FUNDS ENDPOINT ---
 app.get('/funds', async (req, res) => {
     if (!flattradeToken) return res.status(401).json({ error: 'Not Logged In' });
     try {
@@ -205,30 +214,22 @@ app.get('/funds', async (req, res) => {
 });
 
 app.post('/place-order', async (req, res) => {
-    if (!flattradeToken) {
-        return res.status(401).json({ error: 'Not Logged In. Please login once to initialize session.' });
-    }
-    
+    if (!flattradeToken) return res.status(401).json({ error: 'Not Logged In.' });
     try {
         const orderData = req.body;
         const userId = FLATTRADE_CONFIG.user_id.trim();
-        console.log(`⚡ ORDER: ${orderData.side} ${orderData.symbol} Qty:${orderData.qty}`);
+        console.log(`⚡ ORDER: ${orderData.side} ${orderData.symbol}`);
         
         const payload = { ...orderData, uid: userId, actid: userId };
-        
         const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/PlaceOrder', payload, { 
             headers: { Authorization: `Bearer ${flattradeToken}` } 
         });
         
         if (response.data.stat === "Not_Ok") {
-            console.error("❌ Order Rejected:", response.data.emsg);
             return res.status(400).json({ error: response.data.emsg, details: response.data });
         }
-        
-        console.log(`✅ Order Placed. ID: ${response.data.nordno}`);
         res.json(response.data);
     } catch (e) { 
-        console.error("❌ Order Failed:", e.message); 
         res.status(500).json({ error: e.message }); 
     }
 });
@@ -237,45 +238,44 @@ const wss = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' });
 
 function startWebSocket(token) {
     if (marketSocket) { try { marketSocket.terminate(); } catch(e) {} }
-    
-    console.log("Connecting to Broker WebSocket...");
     marketSocket = new WebSocket('wss://piconnect.flattrade.in/PiConnectTP/websocket');
-    
     marketSocket.on('open', () => {
         console.log('✅ Connected to Flattrade Market Data');
         const userId = FLATTRADE_CONFIG.user_id.trim();
         const connectReq = { t: "c", uid: userId, actid: userId, source: "API" };
         marketSocket.send(JSON.stringify(connectReq));
-        
         setTimeout(() => { 
             const subscribeReq = { t: "t", k: "NFO|56000,NFO|56001,NFO|56002" }; 
             marketSocket.send(JSON.stringify(subscribeReq)); 
         }, 1000);
     });
-    
     marketSocket.on('message', (data) => { 
-        wss.clients.forEach(client => { 
-            if (client.readyState === WebSocket.OPEN) client.send(data.toString()); 
-        }); 
+        wss.clients.forEach(client => { if (client.readyState === WebSocket.OPEN) client.send(data.toString()); }); 
     });
-    
-    marketSocket.on('close', () => {
-        console.log("Flattrade WS Closed. Reconnecting...");
-        setTimeout(() => { if(flattradeToken) startWebSocket(flattradeToken); }, 5000);
-    });
+    marketSocket.on('close', () => { setTimeout(() => { if(flattradeToken) startWebSocket(flattradeToken); }, 5000); });
 }
 
 const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`✅ VPS Server running on Port ${PORT}`);
     
-    await restoreSession(); // 🔄 RESTORE SESSION ON BOOT
+    // CONFIG CHECK ON STARTUP
+    const key = FLATTRADE_CONFIG.api_key;
+    const secret = FLATTRADE_CONFIG.api_secret;
 
-    if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
-        console.log(`\n❌❌❌ API KEYS MISSING! Run 'nano vps-server.js' to edit. ❌❌❌\n`);
+    if (key.includes("ENTER_YOUR")) {
+        console.log(`\n❌ KEYS MISSING! Run 'node configure.js' to fix.\n`);
     } else {
-        const cleanKey = FLATTRADE_CONFIG.api_key.trim();
-        console.log(`\n🔑 MANUAL LOGIN: https://auth.flattrade.in/?app_key=${cleanKey}\n`);
+        console.log(`\n🔑 CONFIG CHECK:`);
+        console.log(`   API Key Length:    ${key.length} chars (OK)`);
+        if (secret.length !== 32) {
+             console.log(`   API Secret Length: ${secret.length} chars (❌ INVALID - SHOULD BE 32!)`);
+             console.log(`   👉 RUN 'node configure.js' TO FIX THIS.\n`);
+        } else {
+             console.log(`   API Secret Length: ${secret.length} chars (OK)`);
+        }
     }
+
+    await restoreSession();
 });
 
 server.on('error', (e) => {
