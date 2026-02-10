@@ -55,22 +55,32 @@ const App: React.FC = () => {
   const [latency, setLatency] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [isHandlingCallback, setIsHandlingCallback] = useState(false);
-  const [backendError, setBackendError] = useState<string | null>("Checking connection...");
+  const [backendError, setBackendError] = useState<string | null>("Initializing...");
   const [isLoadingFunds, setIsLoadingFunds] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  
+  // Ref to lock authentication to run only once
+  const authProcessingRef = useRef(false);
 
-  // 1. URL LOGIN HANDLER (Direct Connection)
+  // 1. MAIN INITIALIZATION LOGIC
   useEffect(() => {
-    const handleAuth = async () => {
+    const init = async () => {
         const params = new URLSearchParams(window.location.search);
         const code = params.get('code');
-        
+
+        // CASE A: We have a login code (Returning from Broker)
         if (code) {
-            setIsHandlingCallback(true);
+            if (authProcessingRef.current) return; // Prevent double firing
+            authProcessingRef.current = true;
+
+            // Clean URL immediately to prevent refresh loops
+            window.history.replaceState({}, document.title, window.location.pathname);
+
             setIsLoggingIn(true);
-            
+            setBackendError(null);
+
             try {
+                console.log("Processing Auth Code...");
                 const response = await fetch(`${API_BASE}/authenticate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -80,51 +90,62 @@ const App: React.FC = () => {
 
                 if (data.success) {
                     setIsConnected(true);
-                    setBackendError(null);
                     setShowSuccessModal(true);
-                    // Clear URL only AFTER success to prevent loops
-                    window.history.replaceState({}, document.title, window.location.pathname);
                 } else {
-                    const msg = data.details?.emsg || data.error || "Unknown Error";
-                    alert(`❌ Login Failed: ${msg}`);
+                    alert(`Login Failed: ${data.details?.emsg || data.error || "Unknown Error"}`);
                 }
             } catch (e) {
-                alert("❌ Network Error: Could not connect to VPS Backend.");
+                alert("Connection Error: Could not reach VPS Backend.");
             } finally {
                 setIsLoggingIn(false);
-                setIsHandlingCallback(false);
+                authProcessingRef.current = false; // Release lock (optional, but good practice)
             }
+        } 
+        // CASE B: Normal Load (Check if already logged in)
+        else {
+            checkConnection();
+            const interval = setInterval(checkConnection, 3000);
+            return () => clearInterval(interval);
         }
     };
-    handleAuth();
+
+    init();
   }, []);
 
-  // 2. PERIODIC HEALTH CHECK
-  useEffect(() => {
-    if (isHandlingCallback) return; // Don't check while logging in
+  // 2. HEALTH CHECKER (Isolated)
+  const checkConnection = async () => {
+      // Don't check if we are currently trying to log in
+      if (authProcessingRef.current || isLoggingIn) return;
 
-    const checkConnection = async () => {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000);
         
-        await fetch(`${API_BASE}/ping`, { signal: controller.signal });
-        const authRes = await fetch(`${API_BASE}/check-auth`, { signal: controller.signal });
-        const authData = await authRes.json();
+        // Parallel checks for speed
+        const [pingRes, authRes] = await Promise.all([
+            fetch(`${API_BASE}/ping`, { signal: controller.signal }).catch(() => null),
+            fetch(`${API_BASE}/check-auth`, { signal: controller.signal }).catch(() => null)
+        ]);
         
         clearTimeout(timeoutId);
+
+        if (!pingRes) {
+            setBackendError("VPS SERVER OFFLINE");
+            setIsConnected(false);
+            return;
+        }
+
         setBackendError(null);
-        if (!isLoggingIn) setIsConnected(authData.isLoggedIn === true);
+        
+        if (authRes && authRes.ok) {
+            const authData = await authRes.json();
+            setIsConnected(authData.isLoggedIn === true);
+        }
       } catch (e) {
-        setBackendError("VPS SERVER OFFLINE");
+        setBackendError("VPS UNREACHABLE");
         setIsConnected(false);
       }
-    };
-
-    checkConnection();
-    const interval = setInterval(checkConnection, 3000);
-    return () => clearInterval(interval);
-  }, [isLoggingIn, isHandlingCallback]);
+  };
 
   // 3. WEBSOCKET CONNECTION
   useEffect(() => {
@@ -174,7 +195,7 @@ const App: React.FC = () => {
 
   // 4. FETCH FUNDS
   const fetchFunds = async () => {
-    if (!isConnected) return;
+    // ALLOW FETCH ATTEMPT EVEN IF "DISCONNECTED" TO FORCE REFRESH
     setIsLoadingFunds(true);
     try {
         const res = await fetch(`${API_BASE}/funds`);
@@ -218,7 +239,7 @@ const App: React.FC = () => {
   };
 
   const handleLogin = async () => {
-    if (backendError) {
+    if (backendError && backendError !== "Initializing...") {
         alert("Cannot Login: The VPS Server is Offline.\n\nPlease go to your VPS Terminal and run:\ncd trading-sensex\nnpm run start-all");
         return;
     }
@@ -227,7 +248,7 @@ const App: React.FC = () => {
         const res = await fetch(`${API_BASE}/login`);
         const data = await res.json();
         if (data.url) window.location.href = data.url;
-    } catch (e: any) { alert("Login Error: " + e.message); } finally { setIsLoggingIn(false); }
+    } catch (e: any) { alert("Login Error: " + e.message); setIsLoggingIn(false); }
   };
 
   const handleIndexSwitch = (index: MarketIndex) => {
@@ -248,11 +269,11 @@ const App: React.FC = () => {
   };
 
   const handleBuy = async (type: 'CE' | 'PE') => {
-    if (!isConnected) {
-        alert("⚠️ BROKER NOT CONNECTED\n\nPlease click the 'LOGIN BROKER' button at the top right.");
-        return;
-    }
-
+    // ---------------------------------------------------------
+    // CHANGE: Removed Client-Side 'isConnected' Check
+    // Allows sending orders even if UI thinks it's disconnected
+    // ---------------------------------------------------------
+    
     const strike = type === 'CE' ? selectedCeStrike : selectedPeStrike;
     const reqPrice = parseFloat(type === 'CE' ? ceEntryPrice : peEntryPrice);
     const orderQty = config.baseQty;
@@ -314,7 +335,10 @@ const App: React.FC = () => {
   };
 
   const handleManualExit = async (id: string) => {
-    if (!isConnected) return;
+    // ---------------------------------------------------------
+    // CHANGE: Removed Client-Side 'isConnected' Check
+    // ---------------------------------------------------------
+    
     const pos = stateRef.current.positions.find(p => p.id === id);
     if (!pos || pos.status === 'CLOSED') return;
     const snapshotLtp = pos.type === 'CE' ? stateRef.current.ceLtp : stateRef.current.peLtp;
@@ -372,7 +396,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#020617] text-slate-300 font-sans selection:bg-blue-500/30 pb-10 relative">
       
       {/* AUTH LOADING OVERLAY */}
-      {isHandlingCallback && (
+      {isLoggingIn && (
         <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/90 backdrop-blur-md">
             <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
             <h2 className="text-xl font-bold text-white tracking-tight">Verifying Credentials</h2>
@@ -411,7 +435,7 @@ const App: React.FC = () => {
                 onClick={isConnected ? undefined : handleLogin} 
                 disabled={isLoggingIn || isConnected || !!backendError}
                 className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded shadow-lg transition-all ${
-                    isConnected ? 'bg-emerald-500 text-white cursor-default shadow-emerald-500/20' : backendError ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20'
+                    isConnected ? 'bg-emerald-500 text-white cursor-default shadow-emerald-500/20' : (backendError && backendError !== "Initializing...") ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20'
                 }`}
             >
                 {isLoggingIn ? (<><RefreshCw className="w-3 h-3 animate-spin" /><span>CONNECTING...</span></>) : isConnected ? (<><Wifi className="w-3 h-3" /><span>SYSTEM ONLINE</span></>) : (<><Zap className="w-3 h-3 fill-current" /><span>LOGIN BROKER</span></>)}
@@ -420,7 +444,7 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {backendError && (
+      {backendError && backendError !== "Initializing..." && (
         <div className="bg-red-500 text-white py-3 px-4 text-center animate-pulse">
             <div className="flex items-center justify-center gap-2 text-sm font-bold">
                 <AlertTriangle className="w-5 h-5" />
@@ -695,48 +719,6 @@ const App: React.FC = () => {
                           )}
                         </tbody>
                       </table>
-                  </div>
-              )}
-              {activeTab === 'FUNDS' && (
-                  <div className="p-6">
-                      {!isConnected ? (
-                           <div className="flex flex-col items-center justify-center p-12 text-slate-500 bg-slate-800/20 rounded-lg border border-slate-800 border-dashed">
-                               <WifiOff className="w-12 h-12 mb-4 opacity-50" />
-                               <h3 className="text-lg font-bold text-slate-400">Broker Disconnected</h3>
-                               <p className="text-sm mb-6">Please login to view account funds.</p>
-                               <button onClick={handleLogin} disabled={isLoggingIn || !!backendError} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded shadow-lg transition-all">{isLoggingIn ? 'Connecting...' : 'LOGIN NOW'}</button>
-                           </div>
-                      ) : (
-                        <div className="space-y-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-sm font-bold text-white flex items-center gap-2"><Wallet className="w-4 h-4 text-blue-500" /> Account Overview</h3>
-                                <button onClick={fetchFunds} disabled={isLoadingFunds} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded text-slate-300 transition-colors"><RefreshCw className={`w-3 h-3 ${isLoadingFunds ? 'animate-spin' : ''}`} /> Refresh</button>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="bg-gradient-to-br from-slate-900 to-slate-950 p-6 rounded-xl border border-slate-800 relative overflow-hidden">
-                                     <div className="absolute top-0 right-0 p-6 opacity-5"><PieChart className="w-32 h-32 text-blue-500" /></div>
-                                     <div className="relative z-10">
-                                         <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Net Available Margin</p>
-                                         <h2 className="text-4xl font-black text-emerald-400 font-mono mb-6">{formatCurrency(funds.availableMargin)}</h2>
-                                         <div className="space-y-2">
-                                             <div className="flex justify-between text-[10px] font-bold uppercase text-slate-500"><span>Used: {usedPercentage.toFixed(1)}%</span><span>Total: {formatCurrency(totalFunds)}</span></div>
-                                             <div className="relative h-3 w-full bg-slate-800 rounded-full overflow-hidden">
-                                                 <div className={`h-full transition-all duration-500 ${usedPercentage > 90 ? 'bg-rose-500' : usedPercentage > 50 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ width: `${usedPercentage}%` }}></div>
-                                                 <div className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-white/80 drop-shadow-md">{usedPercentage.toFixed(1)}% Utilized</div>
-                                             </div>
-                                         </div>
-                                     </div>
-                                </div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center"><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowUpRight className="w-3 h-3 text-blue-400" /> Used Margin</p><p className="text-xl font-bold text-white font-mono">{formatCurrency(funds.usedMargin)}</p></div>
-                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center"><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><History className="w-3 h-3 text-slate-400" /> Opening Balance</p><p className="text-xl font-bold text-white font-mono">{formatCurrency(funds.openingBalance)}</p></div>
-                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center"><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowRightCircle className="w-3 h-3 text-emerald-500" /> Pay In</p><p className="text-xl font-bold text-emerald-400 font-mono">{formatCurrency(funds.payIn)}</p></div>
-                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center"><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowRightCircle className="w-3 h-3 text-rose-500" /> Pay Out</p><p className="text-xl font-bold text-rose-400 font-mono">{formatCurrency(funds.payOut)}</p></div>
-                                </div>
-                            </div>
-                            <div className="p-4 bg-slate-900/30 rounded-lg border border-slate-800/50 text-[10px] text-slate-500"><p><strong>Note:</strong> 'Available Margin' is calculated as Cash Balance - Margin Used. Data is fetched directly from the Broker API.</p></div>
-                        </div>
-                      )}
                   </div>
               )}
            </div>
