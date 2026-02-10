@@ -3,14 +3,13 @@ import {
   Settings, Zap, TrendingUp, TrendingDown, Layers, ArrowUpRight,
   Shield, Play, Target, ChevronDown, ChevronUp, AlertTriangle, RefreshCw,
   Clock, FileText, CheckCircle2, XCircle, AlertCircle, History, Wallet, PieChart, ArrowRightCircle, WifiOff,
-  Calculator, Receipt, Filter, Copy, Wifi, Check
+  Calculator, Receipt, Filter, Copy, Wifi, Check, Loader2
 } from 'lucide-react';
 import { NumberInput } from './components/ui/Input';
 import { StatusBadge } from './components/ui/StatusBadge';
 import { DashboardConfig, Position, SessionStats, Order, Trade, FundLimits, Watcher } from './types';
 import { DEFAULT_DASHBOARD_CONFIG } from './constants';
 
-// AUTOMATICALLY DETECT IP (Works on VPS and Localhost)
 const getHostname = () => window.location.hostname || 'localhost';
 const API_BASE = `http://${getHostname()}:5000`;
 const WS_URL = `ws://${getHostname()}:8080`;
@@ -20,21 +19,13 @@ const formatTime = () => new Date().toLocaleTimeString('en-US', { hour12: false,
 
 type MarketIndex = 'SENSEX' | 'NIFTY' | 'BANKNIFTY';
 
-// --- UTILITY: Calculate Indian F&O Charges (Estimates) ---
 const calculateCharges = (turnover: number, side: 'BUY' | 'SELL') => {
-    // Flattrade Brokerage: 0
     const brokerage = 0;
-    // STT: 0.125% on Sell Only (Options)
     const stt = side === 'SELL' ? turnover * 0.00125 : 0;
-    // Exchange Txn (NSE Options): ~0.05%
     const exchTxn = turnover * 0.0005;
-    // Stamp Duty: 0.003% on Buy Only
     const stampDuty = side === 'BUY' ? turnover * 0.00003 : 0;
-    // GST: 18% on (Brokerage + Exch Txn)
     const gst = (brokerage + exchTxn) * 0.18;
-    // SEBI Charges: 10 per crore (~0.0001%)
     const sebi = turnover * 0.000001;
-
     return brokerage + stt + exchTxn + stampDuty + gst + sebi;
 };
 
@@ -64,96 +55,76 @@ const App: React.FC = () => {
   const [latency, setLatency] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isHandlingCallback, setIsHandlingCallback] = useState(false);
   const [backendError, setBackendError] = useState<string | null>("Checking connection...");
   const [isLoadingFunds, setIsLoadingFunds] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
-  // 1. ROBUST CONNECTION CHECK (Health + Auth)
+  // 1. URL LOGIN HANDLER (Direct Connection)
   useEffect(() => {
+    const handleAuth = async () => {
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('code');
+        
+        if (code) {
+            setIsHandlingCallback(true);
+            setIsLoggingIn(true);
+            
+            try {
+                const response = await fetch(`${API_BASE}/authenticate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    setIsConnected(true);
+                    setBackendError(null);
+                    setShowSuccessModal(true);
+                    // Clear URL only AFTER success to prevent loops
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } else {
+                    const msg = data.details?.emsg || data.error || "Unknown Error";
+                    alert(`❌ Login Failed: ${msg}`);
+                }
+            } catch (e) {
+                alert("❌ Network Error: Could not connect to VPS Backend.");
+            } finally {
+                setIsLoggingIn(false);
+                setIsHandlingCallback(false);
+            }
+        }
+    };
+    handleAuth();
+  }, []);
+
+  // 2. PERIODIC HEALTH CHECK
+  useEffect(() => {
+    if (isHandlingCallback) return; // Don't check while logging in
+
     const checkConnection = async () => {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000);
         
-        // Check 1: VPS Alive?
         await fetch(`${API_BASE}/ping`, { signal: controller.signal });
-        
-        // Check 2: Broker Logged In?
         const authRes = await fetch(`${API_BASE}/check-auth`, { signal: controller.signal });
         const authData = await authRes.json();
         
         clearTimeout(timeoutId);
-        
         setBackendError(null);
-        // Only update if not currently processing a login to avoid UI flickering
-        if (!isLoggingIn) {
-            setIsConnected(authData.isLoggedIn === true);
-        }
+        if (!isLoggingIn) setIsConnected(authData.isLoggedIn === true);
       } catch (e) {
         setBackendError("VPS SERVER OFFLINE");
         setIsConnected(false);
       }
     };
 
-    checkConnection(); // Initial check
-    const interval = setInterval(checkConnection, 2000); // Check often to sync UI state
+    checkConnection();
+    const interval = setInterval(checkConnection, 3000);
     return () => clearInterval(interval);
-  }, [isLoggingIn]);
-
-  // 2. AUTHENTICATION HANDLER
-  const authAttempted = useRef(false); // Ref to prevent double-execution in StrictMode
-
-  useEffect(() => {
-    const handleAuthCallback = async () => {
-        // 1. GET CODE
-        const params = new URLSearchParams(window.location.search);
-        const code = params.get('code'); 
-        
-        if (!code) return; // Exit if no code found
-
-        // 2. IMMEDIATE CLEANUP: Remove code from URL *BEFORE* async fetch.
-        // This prevents React StrictMode from trying to use the same code twice.
-        window.history.replaceState({}, document.title, window.location.pathname);
-        
-        // 3. Prevent double-submission guard
-        if (authAttempted.current) return;
-        authAttempted.current = true;
-        
-        setIsLoggingIn(true);
-        
-        try {
-            console.log("Sending Auth Code to VPS...");
-            const response = await fetch(`${API_BASE}/authenticate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code })
-            });
-            const data = await response.json();
-
-            if (data.success) {
-                setIsConnected(true);
-                setBackendError(null);
-                setShowSuccessModal(true); // Show Success Modal
-            } else {
-                // Formatting for better readability of the error
-                let errorDetails = "";
-                if (data.details && typeof data.details === 'object') {
-                    errorDetails = JSON.stringify(data.details, null, 2);
-                } else {
-                    errorDetails = data.details || data.error;
-                }
-                
-                alert(`❌ LOGIN FAILED\n\nServer Response:\n${errorDetails}`);
-            }
-        } catch (e) {
-            console.error(e);
-            alert(`❌ CONNECTION ERROR\n\nCould not reach VPS Server at ${API_BASE}. Check if server is running.`);
-        } finally {
-            setIsLoggingIn(false);
-        }
-    };
-    handleAuthCallback();
-  }, []);
+  }, [isLoggingIn, isHandlingCallback]);
 
   // 3. WEBSOCKET CONNECTION
   useEffect(() => {
@@ -168,20 +139,15 @@ const App: React.FC = () => {
               try {
                 const data = JSON.parse(event.data);
                 const now = Date.now();
-                
-                // Update Spot/LTP
                 if (data.symbol === selectedIndex) setSpotPrice(data.lp); 
                 if (data.symbol.includes('CE')) stateRef.current.ceLtp = data.lp;
                 if (data.symbol.includes('PE')) stateRef.current.peLtp = data.lp;
                 if (data.timestamp) setLatency(now - data.timestamp);
 
-                // Live PnL Calculation
                 let unrealizedMtm = 0;
                 let realizedMtm = 0;
-                
                 stateRef.current.positions.forEach(pos => {
                     if (pos.status === 'OPEN') {
-                        // Use latest LTP
                         const liveLtp = pos.type === 'CE' ? stateRef.current.ceLtp : stateRef.current.peLtp;
                         if (liveLtp > 0) {
                             pos.ltp = liveLtp;
@@ -191,9 +157,7 @@ const App: React.FC = () => {
                     }
                     realizedMtm += (pos.realizedPnl || 0);
                 });
-                
                 stateRef.current.stats.totalMtm = realizedMtm + unrealizedMtm;
-
                 setRenderTrigger(prev => prev + 1);
               } catch (e) {}
             };
@@ -208,52 +172,34 @@ const App: React.FC = () => {
     return () => { if (ws) ws.close(); clearInterval(reconnectInterval); };
   }, [selectedIndex]);
 
-  // 4. FETCH FUNDS (New)
+  // 4. FETCH FUNDS
   const fetchFunds = async () => {
     if (!isConnected) return;
     setIsLoadingFunds(true);
     try {
         const res = await fetch(`${API_BASE}/funds`);
         const data = await res.json();
-        
         if (data && (data.stat === "Ok" || data.cash)) {
-             // Ensure safe parsing of string numbers (sometimes contain commas)
              const safeParse = (val: any) => {
                 if (typeof val === 'number') return val;
                 if (typeof val === 'string') return parseFloat(val.replace(/,/g, '')) || 0;
                 return 0;
              };
-
-             const cash = safeParse(data.cash);      // Gross Ledger Balance
-             const used = safeParse(data.marginused); // Margin Blocked
-             const payin = safeParse(data.payin);     // Today's Payin
-             const payout = safeParse(data.payout);   // Today's Payout
-             
+             const cash = safeParse(data.cash);
+             const used = safeParse(data.marginused);
              stateRef.current.funds = {
-                availableMargin: cash - used, // Net Available for Trading
-                usedMargin: used,
-                totalCash: cash,
-                openingBalance: cash - payin + payout, 
-                payIn: payin,
-                payOut: payout
+                availableMargin: cash - used, usedMargin: used, totalCash: cash,
+                openingBalance: cash - safeParse(data.payin) + safeParse(data.payout), 
+                payIn: safeParse(data.payin), payOut: safeParse(data.payout)
              };
              setRenderTrigger(prev => prev + 1);
         }
-    } catch (e) {
-        console.error("Failed to fetch funds:", e);
-    } finally {
-        setIsLoadingFunds(false);
-    }
+    } catch (e) { console.error("Failed to fetch funds:", e); } finally { setIsLoadingFunds(false); }
   };
 
   useEffect(() => {
-      if (activeTab === 'FUNDS') {
-          fetchFunds();
-          const id = setInterval(fetchFunds, 10000); 
-          return () => clearInterval(id);
-      }
+      if (activeTab === 'FUNDS') { fetchFunds(); const id = setInterval(fetchFunds, 10000); return () => clearInterval(id); }
   }, [activeTab, isConnected]);
-
 
   const addOrder = (order: Order) => { stateRef.current.orders.unshift(order); };
   const toggleModule = (mod: 'A' | 'B' | 'C') => { setExpandedModules(prev => ({...prev, [mod]: !prev[mod]})); };
@@ -261,21 +207,12 @@ const App: React.FC = () => {
   const placeBackendOrder = async (orderData: any) => {
       try {
           const response = await fetch(`${API_BASE}/place-order`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(orderData)
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(orderData)
           });
           const result = await response.json();
-          if (!response.ok) {
-            throw new Error(result.error || result.message || `Server Error ${response.status}`);
-          }
+          if (!response.ok) throw new Error(result.error || result.message || `Server Error ${response.status}`);
           return result;
       } catch (e: any) {
-          const isNetworkError = e.message.includes('Failed to fetch') || e.message.includes('NetworkError');
-          if (isNetworkError) {
-             alert(`CRITICAL ERROR: Could not reach VPS Backend!\n\nPlease run 'npm run start-all' in your VPS terminal.`);
-             return { status: "FAILED", message: "Network Error: VPS Unreachable" };
-          }
           return { status: "FAILED", message: e.message };
       }
   };
@@ -287,25 +224,10 @@ const App: React.FC = () => {
     }
     setIsLoggingIn(true);
     try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        
-        const res = await fetch(`${API_BASE}/login`, { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (!res.ok) throw new Error(`Server responded with ${res.status}`);
-        
+        const res = await fetch(`${API_BASE}/login`);
         const data = await res.json();
-        if (data.url) {
-            window.location.href = data.url;
-        } else {
-            alert('Error: Login URL not found in server response.');
-        }
-    } catch (e: any) {
-        alert(`Login Failed: Could not connect to Port 5000.\n\n1. Check AWS Firewall (allow Port 5000)\n2. Ensure 'npm run start-all' is running.`);
-    } finally {
-        setIsLoggingIn(false);
-    }
+        if (data.url) window.location.href = data.url;
+    } catch (e: any) { alert("Login Error: " + e.message); } finally { setIsLoggingIn(false); }
   };
 
   const handleIndexSwitch = (index: MarketIndex) => {
@@ -327,7 +249,7 @@ const App: React.FC = () => {
 
   const handleBuy = async (type: 'CE' | 'PE') => {
     if (!isConnected) {
-        alert("⚠️ BROKER NOT CONNECTED\n\nPlease click the 'LOGIN BROKER' button at the top right to start trading.\n\nIf you have already logged in today, wait for the session to auto-restore.");
+        alert("⚠️ BROKER NOT CONNECTED\n\nPlease click the 'LOGIN BROKER' button at the top right.");
         return;
     }
 
@@ -335,8 +257,6 @@ const App: React.FC = () => {
     const reqPrice = parseFloat(type === 'CE' ? ceEntryPrice : peEntryPrice);
     const orderQty = config.baseQty;
     const isLimit = reqPrice > 0;
-    
-    // SNAPSHOT PRICE for Slippage Calculation
     const snapshotLtp = type === 'CE' ? stateRef.current.ceLtp : stateRef.current.peLtp;
     const intendedPrice = isLimit ? reqPrice : snapshotLtp;
 
@@ -357,56 +277,35 @@ const App: React.FC = () => {
     const orderIndex = stateRef.current.orders.findIndex(o => o.id === tempId);
     if (stateRef.current.orders[orderIndex]) {
         if (result && result.ordernumber) {
-            // ORDER SUCCESS
-            const filledPrice = parseFloat(result.averagePrice) || (reqPrice || snapshotLtp); // API might return string
-            
+            const filledPrice = parseFloat(result.averagePrice) || (reqPrice || snapshotLtp);
             stateRef.current.orders[orderIndex].status = 'COMPLETE'; 
             stateRef.current.orders[orderIndex].exchangeOrderId = result.ordernumber;
             stateRef.current.orders[orderIndex].message = 'Placed on Exchange';
             stateRef.current.orders[orderIndex].averagePrice = filledPrice;
 
-            // --- ADVANCED CALCULATIONS ---
-            // Slippage: Intended - Actual. (Ex: Wanted 100, Got 101. Slippage = -1). 
             const slippage = intendedPrice - filledPrice;
             const turnover = filledPrice * orderQty;
             const charges = calculateCharges(turnover, 'BUY');
 
-            // Update Session Stats
             stateRef.current.stats.totalTurnover += turnover;
             stateRef.current.stats.totalCharges += charges;
             stateRef.current.stats.totalSlippage += (slippage * orderQty);
 
-            // RECORD TRADE
             const newTrade: Trade = {
-                id: `TRD-${Date.now()}`,
-                orderId: result.ordernumber,
-                time: formatTime(),
-                symbol: `${selectedIndex} ${strike} ${type}`,
-                side: 'BUY',
-                product: 'NRML',
-                qty: orderQty,
-                price: filledPrice,
-                value: turnover,
-                triggerPrice: intendedPrice, // Store what we wanted
-                slippage: slippage,
-                charges: charges
+                id: `TRD-${Date.now()}`, orderId: result.ordernumber, time: formatTime(), symbol: `${selectedIndex} ${strike} ${type}`,
+                side: 'BUY', product: 'NRML', qty: orderQty, price: filledPrice, value: turnover,
+                triggerPrice: intendedPrice, slippage: slippage, charges: charges
             };
             stateRef.current.trades.unshift(newTrade);
             
-            // OPEN POSITION
             const newPos: Position = {
-                id: result.ordernumber, type, strike, qty: orderQty,
-                avgPrice: filledPrice, 
-                basePrice: filledPrice,
-                ltp: filledPrice, pnl: 0, realizedPnl: 0,
-                slPrice: filledPrice - config.initialSLPoints,
-                targetPrice: filledPrice + config.targetPoints,
-                status: 'OPEN', scalingCount: 0, isPyramided: false,
+                id: result.ordernumber, type, strike, qty: orderQty, avgPrice: filledPrice, basePrice: filledPrice,
+                ltp: filledPrice, pnl: 0, realizedPnl: 0, slPrice: filledPrice - config.initialSLPoints,
+                targetPrice: filledPrice + config.targetPoints, status: 'OPEN', scalingCount: 0, isPyramided: false,
                 reentryAttemptsLeft: config.maxReentryAttempts
             };
             stateRef.current.positions.push(newPos);
         } else {
-            // ORDER REJECTED
             stateRef.current.orders[orderIndex].status = 'REJECTED';
             stateRef.current.orders[orderIndex].message = result.message || 'Unknown Error';
         }
@@ -418,62 +317,34 @@ const App: React.FC = () => {
     if (!isConnected) return;
     const pos = stateRef.current.positions.find(p => p.id === id);
     if (!pos || pos.status === 'CLOSED') return;
-    
-    // SNAPSHOT PRICE for Slippage
     const snapshotLtp = pos.type === 'CE' ? stateRef.current.ceLtp : stateRef.current.peLtp;
-
-    // Create Exit Order
     const tempId = `ORD-EXIT-${Date.now()}`;
     const newOrder: Order = {
       id: tempId, time: formatTime(), symbol: `${selectedIndex} ${pos.strike} ${pos.type}`,
-      type: 'MKT', side: 'SELL', product: 'NRML', qty: pos.qty, price: 0,
-      status: 'TRIGGER PENDING', averagePrice: 0, message: 'Exiting...'
+      type: 'MKT', side: 'SELL', product: 'NRML', qty: pos.qty, price: 0, status: 'TRIGGER PENDING', averagePrice: 0, message: 'Exiting...'
     };
     addOrder(newOrder);
     setRenderTrigger(prev => prev + 1);
-
-    const result = await placeBackendOrder({
-        exchange: 'NFO', symbol: `${selectedIndex} ${pos.strike} ${pos.type}`,
-        qty: pos.qty, type: 'MARKET', side: 'SELL'
-    });
-
+    const result = await placeBackendOrder({ exchange: 'NFO', symbol: `${selectedIndex} ${pos.strike} ${pos.type}`, qty: pos.qty, type: 'MARKET', side: 'SELL' });
     const orderIndex = stateRef.current.orders.findIndex(o => o.id === tempId);
     if (stateRef.current.orders[orderIndex]) {
         if (result && result.ordernumber) {
              const exitPrice = parseFloat(result.averagePrice) || snapshotLtp;
-
              stateRef.current.orders[orderIndex].status = 'COMPLETE';
              stateRef.current.orders[orderIndex].exchangeOrderId = result.ordernumber;
              stateRef.current.orders[orderIndex].averagePrice = exitPrice;
-
-             // --- ADVANCED CALCULATIONS ---
-             // Sell Slippage: Actual - Intended (Ex: Wanted 100, Got 99. Slippage = -1)
              const slippage = exitPrice - snapshotLtp; 
              const turnover = exitPrice * pos.qty;
              const charges = calculateCharges(turnover, 'SELL');
-
-             // Update Session Stats
              stateRef.current.stats.totalTurnover += turnover;
              stateRef.current.stats.totalCharges += charges;
              stateRef.current.stats.totalSlippage += (slippage * pos.qty);
-
-             // RECORD EXIT TRADE
              const newTrade: Trade = {
-                id: `TRD-${Date.now()}`,
-                orderId: result.ordernumber,
-                time: formatTime(),
-                symbol: `${selectedIndex} ${pos.strike} ${pos.type}`,
-                side: 'SELL',
-                product: 'NRML',
-                qty: pos.qty,
-                price: exitPrice,
-                value: turnover,
-                triggerPrice: snapshotLtp,
-                slippage: slippage,
-                charges: charges
+                id: `TRD-${Date.now()}`, orderId: result.ordernumber, time: formatTime(), symbol: `${selectedIndex} ${pos.strike} ${pos.type}`,
+                side: 'SELL', product: 'NRML', qty: pos.qty, price: exitPrice, value: turnover,
+                triggerPrice: snapshotLtp, slippage: slippage, charges: charges
             };
             stateRef.current.trades.unshift(newTrade);
-
             pos.status = 'CLOSED';
             pos.realizedPnl = (exitPrice - pos.avgPrice) * pos.qty;
         } else {
@@ -487,12 +358,8 @@ const App: React.FC = () => {
   const { positions, orders, trades, stats, ceLtp, peLtp, watchers, funds } = stateRef.current;
   const activePositions = positions.filter(p => p.status === 'OPEN');
   const displayPositions = [...activePositions].reverse();
-
-  // Helper for Funds Progress Bar
   const totalFunds = funds.totalCash > 0 ? funds.totalCash : 1;
   const usedPercentage = Math.min((funds.usedMargin / totalFunds) * 100, 100);
-
-  // Filter Orders for Display
   const filteredOrders = orders.filter(o => {
      if (orderFilter === 'ALL') return true;
      if (orderFilter === 'OPEN') return ['OPEN', 'TRIGGER PENDING'].includes(o.status);
@@ -504,33 +371,30 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#020617] text-slate-300 font-sans selection:bg-blue-500/30 pb-10 relative">
       
+      {/* AUTH LOADING OVERLAY */}
+      {isHandlingCallback && (
+        <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/90 backdrop-blur-md">
+            <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
+            <h2 className="text-xl font-bold text-white tracking-tight">Verifying Credentials</h2>
+            <p className="text-slate-400 mt-2">Connecting to Flattrade Broker API...</p>
+        </div>
+      )}
+
       {/* SUCCESS MODAL OVERLAY */}
       {showSuccessModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-300">
             <div className="bg-[#0f172a] border border-emerald-500/30 p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center relative overflow-hidden transform transition-all scale-100">
-                {/* Decorative Glow */}
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-green-400"></div>
                 <div className="absolute -top-10 -right-10 w-32 h-32 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
                 <div className="mx-auto w-20 h-20 bg-emerald-500/10 rounded-full flex items-center justify-center mb-6 ring-1 ring-emerald-500/30">
                     <CheckCircle2 className="w-10 h-10 text-emerald-500 drop-shadow-lg" />
                 </div>
-                
                 <h2 className="text-2xl font-black text-white mb-2 tracking-tight">Login Successful</h2>
                 <div className="flex items-center justify-center gap-2 mb-6">
-                    <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-bold rounded-full border border-emerald-500/20">
-                        API V2 CONNECTED
-                    </span>
+                    <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-bold rounded-full border border-emerald-500/20">API V2 CONNECTED</span>
                 </div>
-                
-                <p className="text-slate-400 text-sm mb-8 leading-relaxed">
-                    Secure connection established with Flattrade. <br/>You are now ready to execute trades.
-                </p>
-                
-                <button 
-                    onClick={() => setShowSuccessModal(false)} 
-                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20 active:scale-95 flex items-center justify-center gap-2"
-                >
+                <p className="text-slate-400 text-sm mb-8 leading-relaxed">Secure connection established with Flattrade. <br/>You are now ready to execute trades.</p>
+                <button onClick={() => setShowSuccessModal(false)} className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20 active:scale-95 flex items-center justify-center gap-2">
                     CONTINUE TO DASHBOARD <ArrowRightCircle className="w-4 h-4" />
                 </button>
             </div>
@@ -547,29 +411,10 @@ const App: React.FC = () => {
                 onClick={isConnected ? undefined : handleLogin} 
                 disabled={isLoggingIn || isConnected || !!backendError}
                 className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded shadow-lg transition-all ${
-                    isConnected 
-                        ? 'bg-emerald-500 text-white cursor-default shadow-emerald-500/20' 
-                        : backendError 
-                            ? 'bg-slate-700 text-slate-400 cursor-not-allowed' 
-                            : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20'
+                    isConnected ? 'bg-emerald-500 text-white cursor-default shadow-emerald-500/20' : backendError ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20'
                 }`}
             >
-                {isLoggingIn ? (
-                    <>
-                        <RefreshCw className="w-3 h-3 animate-spin" />
-                        <span>CONNECTING...</span>
-                    </>
-                ) : isConnected ? (
-                    <>
-                        <Wifi className="w-3 h-3" />
-                        <span>SYSTEM ONLINE</span>
-                    </>
-                ) : (
-                    <>
-                        <Zap className="w-3 h-3 fill-current" />
-                        <span>LOGIN BROKER</span>
-                    </>
-                )}
+                {isLoggingIn ? (<><RefreshCw className="w-3 h-3 animate-spin" /><span>CONNECTING...</span></>) : isConnected ? (<><Wifi className="w-3 h-3" /><span>SYSTEM ONLINE</span></>) : (<><Zap className="w-3 h-3 fill-current" /><span>LOGIN BROKER</span></>)}
             </button>
           <StatusBadge latency={latency} isConnected={isConnected} />
         </div>
@@ -725,7 +570,6 @@ const App: React.FC = () => {
               )}
               {activeTab === 'ORDERS' && (
                   <div className="p-6">
-                      {/* FILTERS */}
                       <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
                           <h3 className="text-sm font-bold text-white flex items-center gap-2"><FileText className="w-4 h-4 text-blue-500" /> Order Book</h3>
                           <div className="flex bg-slate-900/50 p-1 rounded-lg border border-slate-800">
@@ -736,7 +580,6 @@ const App: React.FC = () => {
                               ))}
                           </div>
                       </div>
-
                       <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="bg-slate-900/20 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800">
@@ -775,45 +618,18 @@ const App: React.FC = () => {
                                  <td className="p-4 text-right align-top">
                                     <div className="text-white font-bold text-sm">{order.qty} Qty</div>
                                     <div className="flex flex-col items-end gap-0.5 mt-1">
-                                        {order.type === 'LMT' ? (
-                                           <span className="text-[10px] text-slate-500">Req: {order.price}</span>
-                                        ) : (
-                                           <span className="text-[10px] text-slate-600 italic">MKT Order</span>
-                                        )}
-                                        {order.averagePrice ? (
-                                            <span className={`text-[10px] font-bold ${order.side === 'BUY' ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                                Avg: {order.averagePrice}
-                                            </span>
-                                        ) : (
-                                            <span className="text-[10px] text-slate-700">--</span>
-                                        )}
+                                        {order.type === 'LMT' ? (<span className="text-[10px] text-slate-500">Req: {order.price}</span>) : (<span className="text-[10px] text-slate-600 italic">MKT Order</span>)}
+                                        {order.averagePrice ? (<span className={`text-[10px] font-bold ${order.side === 'BUY' ? 'text-emerald-500' : 'text-rose-500'}`}>Avg: {order.averagePrice}</span>) : (<span className="text-[10px] text-slate-700">--</span>)}
                                     </div>
                                  </td>
                                  <td className="p-4 align-top min-w-[200px]">
                                     <div className="flex flex-col gap-2">
-                                        {order.status === 'COMPLETE' && (
-                                            <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-[10px] bg-emerald-500/10 px-2 py-1 rounded w-fit border border-emerald-500/20">
-                                                <CheckCircle2 className="w-3 h-3" /> COMPLETE
-                                            </div>
-                                        )}
-                                        {order.status === 'REJECTED' && (
-                                            <div className="flex items-center gap-1.5 text-rose-400 font-bold text-[10px] bg-rose-500/10 px-2 py-1 rounded w-fit border border-rose-500/20">
-                                                <XCircle className="w-3 h-3" /> REJECTED
-                                            </div>
-                                        )}
-                                        {(order.status === 'TRIGGER PENDING' || order.status === 'OPEN') && (
-                                            <div className="flex items-center gap-1.5 text-blue-400 font-bold text-[10px] bg-blue-500/10 px-2 py-1 rounded w-fit border border-blue-500/20 animate-pulse">
-                                                <Clock className="w-3 h-3" /> PENDING
-                                            </div>
-                                        )}
-                                        
-                                        {/* FULL REJECTION DETAILS */}
+                                        {order.status === 'COMPLETE' && (<div className="flex items-center gap-1.5 text-emerald-400 font-bold text-[10px] bg-emerald-500/10 px-2 py-1 rounded w-fit border border-emerald-500/20"><CheckCircle2 className="w-3 h-3" /> COMPLETE</div>)}
+                                        {order.status === 'REJECTED' && (<div className="flex items-center gap-1.5 text-rose-400 font-bold text-[10px] bg-rose-500/10 px-2 py-1 rounded w-fit border border-rose-500/20"><XCircle className="w-3 h-3" /> REJECTED</div>)}
+                                        {(order.status === 'TRIGGER PENDING' || order.status === 'OPEN') && (<div className="flex items-center gap-1.5 text-blue-400 font-bold text-[10px] bg-blue-500/10 px-2 py-1 rounded w-fit border border-blue-500/20 animate-pulse"><Clock className="w-3 h-3" /> PENDING</div>)}
                                         {order.status === 'REJECTED' && order.message && (
                                             <div className="p-2 bg-rose-950/30 border border-rose-500/20 rounded text-rose-300 text-[10px] font-mono whitespace-pre-wrap break-words mt-1">
-                                                <div className="flex items-center gap-1 mb-1 font-bold text-rose-500 uppercase">
-                                                    <AlertCircle className="w-3 h-3" /> Broker Message:
-                                                </div>
-                                                {order.message}
+                                                <div className="flex items-center gap-1 mb-1 font-bold text-rose-500 uppercase"><AlertCircle className="w-3 h-3" /> Broker Message:</div>{order.message}
                                             </div>
                                         )}
                                     </div>
@@ -828,14 +644,9 @@ const App: React.FC = () => {
               {activeTab === 'TRADES' && (
                   <div className="p-6">
                       <div className="flex justify-between items-center mb-6">
-                          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                              <Receipt className="w-4 h-4 text-blue-500" /> Trade Ledger
-                          </h3>
-                          <div className="text-[10px] text-slate-500 bg-slate-900/50 px-3 py-1 rounded border border-slate-800">
-                              Showing all executed trades for this session
-                          </div>
+                          <h3 className="text-sm font-bold text-white flex items-center gap-2"><Receipt className="w-4 h-4 text-blue-500" /> Trade Ledger</h3>
+                          <div className="text-[10px] text-slate-500 bg-slate-900/50 px-3 py-1 rounded border border-slate-800">Showing all executed trades for this session</div>
                       </div>
-
                       <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="bg-slate-900/20 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800">
@@ -848,9 +659,7 @@ const App: React.FC = () => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800 text-xs font-mono">
-                          {trades.length === 0 ? (
-                            <tr><td colSpan={6} className="p-12 text-center text-slate-600 font-sans italic">No trades executed yet.</td></tr>
-                          ) : (
+                          {trades.length === 0 ? (<tr><td colSpan={6} className="p-12 text-center text-slate-600 font-sans italic">No trades executed yet.</td></tr>) : (
                             trades.map(trade => (
                               <tr key={trade.id} className="hover:bg-slate-800/30 transition-colors">
                                  <td className="p-4 align-top">
@@ -862,9 +671,7 @@ const App: React.FC = () => {
                                     <span className="text-[10px] font-bold bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded border border-slate-700 mt-2 inline-block">{trade.product}</span>
                                  </td>
                                  <td className="p-4 align-top">
-                                    <span className={`px-2 py-1 rounded text-[10px] font-black uppercase tracking-wider border ${trade.side === 'BUY' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
-                                        {trade.side}
-                                    </span>
+                                    <span className={`px-2 py-1 rounded text-[10px] font-black uppercase tracking-wider border ${trade.side === 'BUY' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>{trade.side}</span>
                                  </td>
                                  <td className="p-4 text-right align-top">
                                     <div className="text-white font-bold">{trade.qty} @ {trade.price.toFixed(2)}</div>
@@ -874,15 +681,9 @@ const App: React.FC = () => {
                                     <div className="flex flex-col items-end gap-1">
                                         <div className="flex items-center gap-2">
                                             <span className="text-[10px] text-slate-500">Exp: {trade.triggerPrice?.toFixed(2)}</span>
-                                            {/* Slippage: Positive is Green (Good), Negative is Red (Bad) */}
-                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trade.slippage >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                                                {trade.slippage > 0 ? '+' : ''}{trade.slippage.toFixed(2)} Pts
-                                            </span>
+                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trade.slippage >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{trade.slippage > 0 ? '+' : ''}{trade.slippage.toFixed(2)} Pts</span>
                                         </div>
-                                        {/* Total Slippage Value Impact */}
-                                        <div className={`text-[10px] ${trade.slippage >= 0 ? 'text-emerald-500/70' : 'text-rose-500/70'}`}>
-                                            {trade.slippage >= 0 ? 'Gain' : 'Loss'}: {formatCurrency(Math.abs(trade.slippage * trade.qty))}
-                                        </div>
+                                        <div className={`text-[10px] ${trade.slippage >= 0 ? 'text-emerald-500/70' : 'text-rose-500/70'}`}>{trade.slippage >= 0 ? 'Gain' : 'Loss'}: {formatCurrency(Math.abs(trade.slippage * trade.qty))}</div>
                                     </div>
                                  </td>
                                  <td className="p-4 text-right align-top">
@@ -903,73 +704,37 @@ const App: React.FC = () => {
                                <WifiOff className="w-12 h-12 mb-4 opacity-50" />
                                <h3 className="text-lg font-bold text-slate-400">Broker Disconnected</h3>
                                <p className="text-sm mb-6">Please login to view account funds.</p>
-                               <button 
-                                  onClick={handleLogin} 
-                                  disabled={isLoggingIn || !!backendError}
-                                  className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded shadow-lg transition-all"
-                               >
-                                  {isLoggingIn ? 'Connecting...' : 'LOGIN NOW'}
-                               </button>
+                               <button onClick={handleLogin} disabled={isLoggingIn || !!backendError} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded shadow-lg transition-all">{isLoggingIn ? 'Connecting...' : 'LOGIN NOW'}</button>
                            </div>
                       ) : (
                         <div className="space-y-6">
                             <div className="flex items-center justify-between mb-4">
                                 <h3 className="text-sm font-bold text-white flex items-center gap-2"><Wallet className="w-4 h-4 text-blue-500" /> Account Overview</h3>
-                                <button onClick={fetchFunds} disabled={isLoadingFunds} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded text-slate-300 transition-colors">
-                                    <RefreshCw className={`w-3 h-3 ${isLoadingFunds ? 'animate-spin' : ''}`} /> Refresh
-                                </button>
+                                <button onClick={fetchFunds} disabled={isLoadingFunds} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded text-slate-300 transition-colors"><RefreshCw className={`w-3 h-3 ${isLoadingFunds ? 'animate-spin' : ''}`} /> Refresh</button>
                             </div>
-
-                            {/* MAIN SUMMARY CARD */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div className="bg-gradient-to-br from-slate-900 to-slate-950 p-6 rounded-xl border border-slate-800 relative overflow-hidden">
                                      <div className="absolute top-0 right-0 p-6 opacity-5"><PieChart className="w-32 h-32 text-blue-500" /></div>
                                      <div className="relative z-10">
                                          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Net Available Margin</p>
                                          <h2 className="text-4xl font-black text-emerald-400 font-mono mb-6">{formatCurrency(funds.availableMargin)}</h2>
-                                         
-                                         {/* Progress Bar */}
                                          <div className="space-y-2">
-                                             <div className="flex justify-between text-[10px] font-bold uppercase text-slate-500">
-                                                 <span>Used: {usedPercentage.toFixed(1)}%</span>
-                                                 <span>Total: {formatCurrency(totalFunds)}</span>
-                                             </div>
+                                             <div className="flex justify-between text-[10px] font-bold uppercase text-slate-500"><span>Used: {usedPercentage.toFixed(1)}%</span><span>Total: {formatCurrency(totalFunds)}</span></div>
                                              <div className="relative h-3 w-full bg-slate-800 rounded-full overflow-hidden">
-                                                 <div 
-                                                    className={`h-full transition-all duration-500 ${usedPercentage > 90 ? 'bg-rose-500' : usedPercentage > 50 ? 'bg-yellow-500' : 'bg-blue-500'}`}
-                                                    style={{ width: `${usedPercentage}%` }}
-                                                 ></div>
-                                                 <div className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-white/80 drop-shadow-md">
-                                                    {usedPercentage.toFixed(1)}% Utilized
-                                                 </div>
+                                                 <div className={`h-full transition-all duration-500 ${usedPercentage > 90 ? 'bg-rose-500' : usedPercentage > 50 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ width: `${usedPercentage}%` }}></div>
+                                                 <div className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-white/80 drop-shadow-md">{usedPercentage.toFixed(1)}% Utilized</div>
                                              </div>
                                          </div>
                                      </div>
                                 </div>
-
                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center">
-                                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowUpRight className="w-3 h-3 text-blue-400" /> Used Margin</p>
-                                         <p className="text-xl font-bold text-white font-mono">{formatCurrency(funds.usedMargin)}</p>
-                                    </div>
-                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center">
-                                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><History className="w-3 h-3 text-slate-400" /> Opening Balance</p>
-                                         <p className="text-xl font-bold text-white font-mono">{formatCurrency(funds.openingBalance)}</p>
-                                    </div>
-                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center">
-                                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowRightCircle className="w-3 h-3 text-emerald-500" /> Pay In</p>
-                                         <p className="text-xl font-bold text-emerald-400 font-mono">{formatCurrency(funds.payIn)}</p>
-                                    </div>
-                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center">
-                                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowRightCircle className="w-3 h-3 text-rose-500" /> Pay Out</p>
-                                         <p className="text-xl font-bold text-rose-400 font-mono">{formatCurrency(funds.payOut)}</p>
-                                    </div>
+                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center"><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowUpRight className="w-3 h-3 text-blue-400" /> Used Margin</p><p className="text-xl font-bold text-white font-mono">{formatCurrency(funds.usedMargin)}</p></div>
+                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center"><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><History className="w-3 h-3 text-slate-400" /> Opening Balance</p><p className="text-xl font-bold text-white font-mono">{formatCurrency(funds.openingBalance)}</p></div>
+                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center"><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowRightCircle className="w-3 h-3 text-emerald-500" /> Pay In</p><p className="text-xl font-bold text-emerald-400 font-mono">{formatCurrency(funds.payIn)}</p></div>
+                                    <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex flex-col justify-center"><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1"><ArrowRightCircle className="w-3 h-3 text-rose-500" /> Pay Out</p><p className="text-xl font-bold text-rose-400 font-mono">{formatCurrency(funds.payOut)}</p></div>
                                 </div>
                             </div>
-
-                            <div className="p-4 bg-slate-900/30 rounded-lg border border-slate-800/50 text-[10px] text-slate-500">
-                                <p><strong>Note:</strong> 'Available Margin' is calculated as Cash Balance - Margin Used. Data is fetched directly from the Broker API.</p>
-                            </div>
+                            <div className="p-4 bg-slate-900/30 rounded-lg border border-slate-800/50 text-[10px] text-slate-500"><p><strong>Note:</strong> 'Available Margin' is calculated as Cash Balance - Margin Used. Data is fetched directly from the Broker API.</p></div>
                         </div>
                       )}
                   </div>

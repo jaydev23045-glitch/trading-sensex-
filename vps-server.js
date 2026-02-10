@@ -17,14 +17,28 @@ const app = express();
 const PORT = 5000;
 const WS_PORT = 8080;
 const TOKEN_FILE = 'session_token.json';
+const CONFIG_FILE = 'config.json';
 
-// ⚠️KEYS ARE MANAGED BY CONFIGURE.JS NOW⚠️
-const FLATTRADE_CONFIG = {
-    api_key: "ENTER_YOUR_API_KEY_HERE",
-    api_secret: "ENTER_YOUR_API_SECRET_HERE",
-    user_id: "ENTER_YOUR_USER_ID_HERE", 
-    redirect_url: "ENTER_YOUR_REDIRECT_URL_HERE" 
+// LOAD CONFIGURATION
+let FLATTRADE_CONFIG = {
+    api_key: "",
+    api_secret: "",
+    user_id: "",
+    redirect_url: ""
 };
+
+if (fs.existsSync(CONFIG_FILE)) {
+    try {
+        const rawConfig = fs.readFileSync(CONFIG_FILE, 'utf8');
+        FLATTRADE_CONFIG = JSON.parse(rawConfig);
+        console.log("✅ Configuration loaded from config.json");
+    } catch (e) {
+        console.error("❌ Error reading config.json:", e.message);
+    }
+} else {
+    console.log("⚠️  config.json not found. Using defaults (Login might fail).");
+    console.log("👉 Run 'node configure.js' to setup credentials.");
+}
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -45,7 +59,7 @@ function saveSession(token) {
     try {
         const data = JSON.stringify({ 
             token: token, 
-            date: new Date().toDateString() // Expires automatically next day
+            date: new Date().toDateString() 
         });
         fs.writeFileSync(TOKEN_FILE, data);
         console.log("💾 Session Saved. Auto-Login enabled for today.");
@@ -61,7 +75,6 @@ async function restoreSession() {
         const raw = fs.readFileSync(TOKEN_FILE, 'utf8');
         const data = JSON.parse(raw);
         
-        // Check if token is from today
         if (data.date !== new Date().toDateString()) {
             console.log("⚠️ Session expired (Yesterday). Please login again.");
             fs.unlinkSync(TOKEN_FILE);
@@ -70,8 +83,7 @@ async function restoreSession() {
 
         console.log("🔄 Restoring previous session...");
         
-        // Validate Token with Broker
-        if (FLATTRADE_CONFIG.user_id.includes("ENTER_YOUR")) return;
+        if (!FLATTRADE_CONFIG.user_id) return;
         
         const userId = FLATTRADE_CONFIG.user_id.trim();
         const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/Limits', 
@@ -93,23 +105,13 @@ async function restoreSession() {
 }
 
 app.get('/', (req, res) => { res.send("VPS Server is Running! Status: " + (flattradeToken ? "Logged In" : "Waiting for Login")); });
-
-// Health Check
 app.get('/ping', (req, res) => res.send('pong'));
-
-// Auth Check
-app.get('/check-auth', (req, res) => {
-    res.json({ isLoggedIn: !!flattradeToken });
-});
+app.get('/check-auth', (req, res) => { res.json({ isLoggedIn: !!flattradeToken }); });
 
 app.get('/login', (req, res) => { 
-    if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
-        return res.status(500).json({ 
-            error: "CONFIGURATION_ERROR", 
-            message: "API Keys are missing. Please run 'node configure.js' in terminal." 
-        });
+    if (!FLATTRADE_CONFIG.api_key) {
+        return res.status(500).json({ error: "CONFIG_MISSING", message: "Run 'node configure.js' first." });
     }
-    
     const cleanKey = FLATTRADE_CONFIG.api_key.trim();
     const loginUrl = `https://auth.flattrade.in/?app_key=${cleanKey}`; 
     console.log("Serving Login URL:", loginUrl);
@@ -119,37 +121,16 @@ app.get('/login', (req, res) => {
 app.post('/authenticate', async (req, res) => {
     const { code } = req.body;
     
-    if (!code) {
-        return res.status(400).json({ error: "No Code Received", message: "The login code was missing." });
+    if (!code) return res.status(400).json({ error: "No Code", message: "Login code missing." });
+    if (!FLATTRADE_CONFIG.api_key || !FLATTRADE_CONFIG.api_secret) {
+         return res.status(400).json({ error: "CONFIG_MISSING", details: "Run 'node configure.js' on VPS." });
     }
 
-    if (FLATTRADE_CONFIG.api_key.includes("ENTER_YOUR")) {
-         return res.status(400).json({ 
-            error: "KEYS_MISSING", 
-            details: { emsg: "API Keys are missing. Run 'node configure.js' in VPS terminal." } 
-        });
-    }
-
-    // 🛡️ SECURITY: Strict Trim
     const cleanKey = FLATTRADE_CONFIG.api_key.trim();
     const cleanSecret = FLATTRADE_CONFIG.api_secret.trim();
     
-    console.log(`\n🔑 ATTEMPTING LOGIN...`);
+    console.log(`\n🔑 ATTEMPTING LOGIN with Code: ${code.substring(0,5)}...`);
     
-    // DEBUGGING INVALID KEYS
-    if (cleanSecret.length > 40) {
-        console.error(`❌ FATAL ERROR: API SECRET IS TOO LONG (${cleanSecret.length} chars)`);
-        console.error("   It should be 32 chars. You likely pasted the wrong thing.");
-        return res.status(500).json({
-            error: "CONFIGURATION_ERROR",
-            details: {
-                message: "Your API Secret is invalid (Too Long).",
-                tip: "Please run 'node configure.js' to fix this.",
-                debug_info: `Secret Len: ${cleanSecret.length} (Expected: 32)`
-            }
-        });
-    }
-
     try {
         const rawString = cleanKey + code + cleanSecret;
         const apiSecretHash = crypto.createHash('sha256').update(rawString).digest('hex');
@@ -158,44 +139,25 @@ app.post('/authenticate', async (req, res) => {
             api_key: cleanKey, 
             request_code: code, 
             api_secret: apiSecretHash 
-        }, {
-            headers: { 'Content-Type': 'application/json' }
         });
         
-        // 1. Explicit Broker Rejection
+        console.log("Broker Response:", JSON.stringify(response.data));
+
         if (response.data.stat === "Not_Ok") {
-            console.error("❌ Broker Rejected:", response.data.emsg);
-            return res.status(400).json({ 
-                error: response.data.emsg, 
-                details: response.data 
-            });
+            return res.status(400).json({ error: response.data.emsg, details: response.data });
         }
 
-        // 2. Success Case
         if (response.data.token) {
             flattradeToken = response.data.token;
-            console.log("✅ Login Successful. Token obtained.");
-            
-            // SAVE SESSION TO DISK
             saveSession(flattradeToken);
-
             startWebSocket(flattradeToken);
-            res.json({ success: true, token: flattradeToken });
+            return res.json({ success: true, token: flattradeToken });
         } else { 
-            // 3. Hash Mismatch Case
-            console.error("❌ TOKEN MISSING. Broker Response:", JSON.stringify(response.data));
-            res.status(500).json({ 
-                error: "Invalid Secret or Hash Mismatch", 
-                details: {
-                    message: "Broker accepted the request but did not return a token.",
-                    tip: "Run 'node configure.js' to reset your keys.",
-                    debug_info: `Key Len: ${cleanKey.length}, Secret Len: ${cleanSecret.length}`
-                }
-            });
+            return res.status(500).json({ error: "No Token", details: response.data });
         }
     } catch (error) { 
         console.error("❌ Auth Error:", error.response?.data || error.message);
-        res.status(401).json({ error: 'Auth failed', details: error.message }); 
+        res.status(401).json({ error: 'Auth failed', details: error.response?.data || error.message }); 
     }
 });
 
@@ -218,8 +180,6 @@ app.post('/place-order', async (req, res) => {
     try {
         const orderData = req.body;
         const userId = FLATTRADE_CONFIG.user_id.trim();
-        console.log(`⚡ ORDER: ${orderData.side} ${orderData.symbol}`);
-        
         const payload = { ...orderData, uid: userId, actid: userId };
         const response = await axios.post('https://piconnect.flattrade.in/PiConnectTP/PlaceOrder', payload, { 
             headers: { Authorization: `Bearer ${flattradeToken}` } 
@@ -258,21 +218,11 @@ function startWebSocket(token) {
 const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`✅ VPS Server running on Port ${PORT}`);
     
-    // CONFIG CHECK ON STARTUP
-    const key = FLATTRADE_CONFIG.api_key;
-    const secret = FLATTRADE_CONFIG.api_secret;
-
-    if (key.includes("ENTER_YOUR")) {
-        console.log(`\n❌ KEYS MISSING! Run 'node configure.js' to fix.\n`);
+    // CONFIG CHECK
+    if (!FLATTRADE_CONFIG.api_key) {
+        console.log(`\n❌ CONFIG MISSING! Run 'node configure.js' to fix.\n`);
     } else {
-        console.log(`\n🔑 CONFIG CHECK:`);
-        console.log(`   API Key Length:    ${key.length} chars (OK)`);
-        if (secret.length !== 32) {
-             console.log(`   API Secret Length: ${secret.length} chars (❌ INVALID - SHOULD BE 32!)`);
-             console.log(`   👉 RUN 'node configure.js' TO FIX THIS.\n`);
-        } else {
-             console.log(`   API Secret Length: ${secret.length} chars (OK)`);
-        }
+        console.log(`\n🔑 System Configured for User: ${FLATTRADE_CONFIG.user_id}`);
     }
 
     await restoreSession();
