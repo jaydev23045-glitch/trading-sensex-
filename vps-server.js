@@ -141,11 +141,13 @@ app.post('/authenticate', async (req, res) => {
             api_secret: apiSecretHash 
         });
         
-        console.log("Broker Response:", JSON.stringify(response.data));
-
+        // Log Broker Response for debugging
         if (response.data.stat === "Not_Ok") {
+            console.log("❌ BROKER REJECTED LOGIN:", response.data.emsg);
             return res.status(400).json({ error: response.data.emsg, details: response.data });
         }
+
+        console.log("✅ BROKER ACCEPTED LOGIN");
 
         if (response.data.token) {
             flattradeToken = response.data.token;
@@ -156,8 +158,8 @@ app.post('/authenticate', async (req, res) => {
             return res.status(500).json({ error: "No Token", details: response.data });
         }
     } catch (error) { 
-        console.error("❌ Auth Error:", error.response?.data || error.message);
-        res.status(401).json({ error: 'Auth failed', details: error.response?.data || error.message }); 
+        console.error("❌ Auth Request Failed:", error.message);
+        res.status(401).json({ error: 'Auth failed', details: error.message }); 
     }
 });
 

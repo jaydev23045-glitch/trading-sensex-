@@ -29,6 +29,9 @@ const calculateCharges = (turnover: number, side: 'BUY' | 'SELL') => {
     return brokerage + stt + exchTxn + stampDuty + gst + sebi;
 };
 
+// GLOBAL LOCK to prevent double-execution in React Strict Mode
+let authProcessed = false;
+
 const App: React.FC = () => {
   const [config, setConfig] = useState<DashboardConfig>(DEFAULT_DASHBOARD_CONFIG);
   const [expandedModules, setExpandedModules] = useState({ A: true, B: true, C: true });
@@ -59,9 +62,6 @@ const App: React.FC = () => {
   const [isLoadingFunds, setIsLoadingFunds] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
-  // Ref to lock authentication to run only once
-  const authProcessingRef = useRef(false);
-
   // 1. MAIN INITIALIZATION LOGIC
   useEffect(() => {
     const init = async () => {
@@ -70,10 +70,11 @@ const App: React.FC = () => {
 
         // CASE A: We have a login code (Returning from Broker)
         if (code) {
-            if (authProcessingRef.current) return; // Prevent double firing
-            authProcessingRef.current = true;
+            // Check global lock to ensure we only run this ONCE per page load
+            if (authProcessed) return; 
+            authProcessed = true;
 
-            // Clean URL immediately to prevent refresh loops
+            // Clean URL immediately
             window.history.replaceState({}, document.title, window.location.pathname);
 
             setIsLoggingIn(true);
@@ -92,13 +93,13 @@ const App: React.FC = () => {
                     setIsConnected(true);
                     setShowSuccessModal(true);
                 } else {
-                    alert(`Login Failed: ${data.details?.emsg || data.error || "Unknown Error"}`);
+                    console.error("Login Failed:", data);
+                    // NO ALERT HERE - Fail silently to avoid blocking user
                 }
             } catch (e) {
-                alert("Connection Error: Could not reach VPS Backend.");
+                console.error("Connection Error during auth", e);
             } finally {
                 setIsLoggingIn(false);
-                authProcessingRef.current = false; // Release lock (optional, but good practice)
             }
         } 
         // CASE B: Normal Load (Check if already logged in)
@@ -115,7 +116,7 @@ const App: React.FC = () => {
   // 2. HEALTH CHECKER (Isolated)
   const checkConnection = async () => {
       // Don't check if we are currently trying to log in
-      if (authProcessingRef.current || isLoggingIn) return;
+      if (isLoggingIn) return;
 
       try {
         const controller = new AbortController();
@@ -248,7 +249,7 @@ const App: React.FC = () => {
         const res = await fetch(`${API_BASE}/login`);
         const data = await res.json();
         if (data.url) window.location.href = data.url;
-    } catch (e: any) { alert("Login Error: " + e.message); setIsLoggingIn(false); }
+    } catch (e: any) { console.error("Login Error", e); setIsLoggingIn(false); }
   };
 
   const handleIndexSwitch = (index: MarketIndex) => {
@@ -269,10 +270,7 @@ const App: React.FC = () => {
   };
 
   const handleBuy = async (type: 'CE' | 'PE') => {
-    // ---------------------------------------------------------
-    // CHANGE: Removed Client-Side 'isConnected' Check
-    // Allows sending orders even if UI thinks it's disconnected
-    // ---------------------------------------------------------
+    // FORCE BUY: No check for isConnected. Just send it.
     
     const strike = type === 'CE' ? selectedCeStrike : selectedPeStrike;
     const reqPrice = parseFloat(type === 'CE' ? ceEntryPrice : peEntryPrice);
@@ -328,17 +326,14 @@ const App: React.FC = () => {
             stateRef.current.positions.push(newPos);
         } else {
             stateRef.current.orders[orderIndex].status = 'REJECTED';
-            stateRef.current.orders[orderIndex].message = result.message || 'Unknown Error';
+            stateRef.current.orders[orderIndex].message = result.message || result.error || 'Unknown Error';
         }
         setRenderTrigger(prev => prev + 1);
     }
   };
 
   const handleManualExit = async (id: string) => {
-    // ---------------------------------------------------------
-    // CHANGE: Removed Client-Side 'isConnected' Check
-    // ---------------------------------------------------------
-    
+    // FORCE EXIT: No check for isConnected.
     const pos = stateRef.current.positions.find(p => p.id === id);
     if (!pos || pos.status === 'CLOSED') return;
     const snapshotLtp = pos.type === 'CE' ? stateRef.current.ceLtp : stateRef.current.peLtp;
